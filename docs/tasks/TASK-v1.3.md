@@ -4,8 +4,8 @@
 
 ## 背景
 
-- 目前只顯示一台（.130）的 GPU 使用率，來源是 glances API：`GET http://dgx-host:61208/api/4/gpu`，回傳陣列，第一個元素的 `proc` 欄位即 GPU 使用率（%）。
-- 第二台節點 .131 的 glances：`GET http://dgx-host-2:61208/api/4/gpu`，格式相同（已確認可從本機連線）。
+- 目前只顯示一台（dgx-host）的 GPU 使用率，來源是 glances API：`GET http://dgx-host:61208/api/4/gpu`，回傳陣列，第一個元素的 `proc` 欄位即 GPU 使用率（%）。
+- 第二台節點 dgx-host-2 的 glances：`GET http://dgx-host-2:61208/api/4/gpu`，格式相同（已確認可從本機連線）。
 
 ## 需求
 

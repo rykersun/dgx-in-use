@@ -23,6 +23,8 @@
 | `TZ` | 時區，固定 `Asia/Taipei` |
 | `LAST_ACTIVE_FILE` | last_active 持久化路徑，預設 `/data/last_active.json` |
 
+本機真實內網位址放在 `docker-compose.override.yml`（已 gitignore），compose 會自動疊加在 `docker-compose.yml` 之上；repo 內一律只放 `dgx-host`／`dgx-host-2` 佔位符，**不要把真實 IP 寫回 tracked 檔案**。
+
 ## 資料來源
 
 - **TensorFold `/metrics`**：Prometheus 文字格式，取 `tensorfold:requests_running`（執行中）與 `tensorfold:requests_waiting`（排隊中）。連不上 → 頁面顯示「⚠ API 無回應」。

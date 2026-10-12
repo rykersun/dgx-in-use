@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 # 由環境變數設定；METRICS_URL 指向 TensorFold 的 Prometheus 文字格式 endpoint
 METRICS_URL = os.environ.get("METRICS_URL", "http://dgx-host:8000/metrics")
-# GPU_STATS_URL 指向 dgx 上 glances 的 GPU endpoint（proc 欄位為 GPU 使用率 %）
+# GPU_STATS_URL 指向 glances 的 GPU endpoint（proc 欄位為 GPU 使用率 %）
 GPU_STATS_URL = os.environ.get("GPU_STATS_URL", "http://dgx-host:61208/api/4/gpu")
 # GPU_STATS_URLS 為多來源模式：逗號分隔的「名稱=URL」（有設就覆蓋 GPU_STATS_URL）
 GPU_STATS_URLS = os.environ.get("GPU_STATS_URLS", "")
