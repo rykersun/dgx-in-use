@@ -13,3 +13,11 @@ docker compose up -d --build
 ## 怎麼改指標來源
 
 修改 `docker-compose.yml` 裡的 `METRICS_URL` 環境變數（預設 `http://dgx-host:8000/metrics`），再 `docker compose up -d` 重建即可；`PORT` 可改服務埠。只使用 Python 標準庫，無第三方依賴。
+
+## 版本歷史
+
+見 [docs/tasks/](docs/tasks/)。
+
+## 給 Claude Code
+
+`CLAUDE.md` 說明專案慣例，修改前先讀。
