@@ -1,0 +1,14 @@
+services:
+  dgx-in-use:
+    container_name: dgx-in-use
+    build: .
+    ports:
+      - "8901:8901"
+    restart: unless-stopped
+    environment:
+      METRICS_URL: http://dgx-host:8000/metrics
+      GPU_STATS_URLS: spark-23c2=http://dgx-host:61208/api/4/gpu,spark-6a75=http://dgx-host-2:61208/api/4/gpu
+      PORT: "8901"
+      TZ: Asia/Taipei
+    volumes:
+      - ./data:/data
