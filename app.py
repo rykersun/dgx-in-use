@@ -199,34 +199,138 @@ PAGE_TMPL = """<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="5">
+<meta name="theme-color" content="#0e1014">
 <title>DGX 模型使用狀態</title>
 <style>
+  * {{ box-sizing: border-box; }}
   body {{
     margin: 0;
-    min-height: 100vh;
+    min-height: 100dvh;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-family: -apple-system, "Noto Sans TC", sans-serif;
-    background: #111;
-    color: #eee;
+    padding: 1.5rem;
+    background: #0e1014;
+    color: #e6e9ef;
+    font-family: -apple-system, "Noto Sans TC", "Microsoft JhengHei", sans-serif;
   }}
-  .card {{ text-align: center; padding: 1.5rem; }}
-  .status {{ font-size: 2.2rem; font-weight: bold; line-height: 1.4; }}
-  .in-use {{ color: #ff5252; }}
-  .in-use-warn {{ color: #ffa726; }}
-  .idle {{ color: #66bb6a; }}
-  .down {{ color: #9e9e9e; }}
-  .sub {{ margin-top: 1.2rem; font-size: 1rem; color: #bbb; line-height: 1.8; }}
+  .card {{
+    width: 100%;
+    max-width: 26rem;
+    background: #161a22;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 2.5rem 2rem;
+  }}
+  .head {{
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #9aa3b2;
+    letter-spacing: 0.14em;
+    margin-bottom: 1.5rem;
+  }}
+  .status {{
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.4;
+  }}
+  .dot {{
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    vertical-align: middle;
+    margin-right: 0.6rem;
+  }}
+  .in-use {{ color: #f87171; }}
+  .in-use-warn {{ color: #fbbf24; }}
+  .idle {{ color: #4ade80; }}
+  .down {{ color: #9ca3af; }}
+  /* 使用中（含排隊中）時圓點脈動；使用者偏好減少動態時關閉 */
+  .in-use .dot, .in-use-warn .dot {{ animation: pulse 1.6s ease-in-out infinite; }}
+  @keyframes pulse {{
+    0%, 100% {{ opacity: 1; }}
+    50% {{ opacity: 0.3; }}
+  }}
+  @media (prefers-reduced-motion: reduce) {{
+    .in-use .dot, .in-use-warn .dot {{ animation: none; }}
+  }}
+  .gpu {{ margin-top: 1.75rem; }}
+  .gpu-row + .gpu-row {{ margin-top: 1.1rem; }}
+  .gpu-head {{ display: flex; align-items: baseline; gap: 1rem; }}
+  .gpu-name {{ font-size: 0.85rem; color: #9aa3b2; }}
+  .gpu-usage {{
+    margin-left: auto;
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
+    font-size: 1.4rem;
+    font-weight: 600;
+  }}
+  .gpu-bar {{
+    height: 3px;
+    margin-top: 0.55rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    overflow: hidden;
+  }}
+  .gpu-fill {{ height: 100%; border-radius: 999px; background: #e6e9ef; }}
+  .info {{ margin-top: 1.75rem; }}
+  .info-row {{
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    font-size: 0.85rem;
+    line-height: 1.9;
+  }}
+  .info-label {{ color: #9aa3b2; flex-shrink: 0; }}
+  .info-value {{
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
+    color: #e6e9ef;
+    text-align: right;
+    word-break: break-all;
+  }}
+  /* 無回應狀態：資訊值改用次要色 */
+  .info-value.muted {{ color: #9aa3b2; }}
 </style>
 </head>
 <body>
 <div class="card">
-  <div class="status {cls}">{status}</div>
-  <div class="sub">{sub}</div>
+{body}
 </div>
 </body>
 </html>"""
+
+
+def _gpu_row_html(name, usage):
+    """產生單一 GPU 來源的列 HTML；name 為 None（單來源模式）不顯示來源名。
+
+    usage 為 None 時顯示 N/A 且不畫進度條填色。
+    """
+    name_html = f'<span class="gpu-name">{html.escape(name)}</span>' if name else ""
+    if usage is None:
+        val_html, fill_html = "N/A", ""
+    else:
+        val_html = f"{usage:.0f}%"
+        width = max(0.0, min(100.0, usage))
+        fill_html = f'<div class="gpu-fill" style="width:{width:.0f}%"></div>'
+    return (
+        '<div class="gpu-row">'
+        f'<div class="gpu-head">{name_html}<span class="gpu-usage">{val_html}</span></div>'
+        f'<div class="gpu-bar">{fill_html}</div>'
+        "</div>"
+    )
+
+
+def _info_row_html(label, value, muted=False):
+    """產生「標籤 + 值」的資訊列 HTML。"""
+    muted_cls = " muted" if muted else ""
+    return (
+        '<div class="info-row">'
+        f'<span class="info-label">{html.escape(label)}</span>'
+        f'<span class="info-value{muted_cls}">{html.escape(value)}</span>'
+        "</div>"
+    )
 
 
 def render_page(st):
@@ -235,36 +339,39 @@ def render_page(st):
     if st["ok"]:
         running, waiting = st["requests_running"], st["requests_waiting"]
         if running > 0:
-            line = f"● 使用中：{running} 個請求執行中"
+            line = f"使用中：{running} 個請求執行中"
             if waiting > 0:
                 line += f"、{waiting} 個排隊中"
             cls = "in-use-warn" if waiting > 0 else "in-use"
         else:
-            line = "○ 閒置中（沒有請求）"
+            line = "閒置中（沒有請求）"
             cls = "idle"
-        sub = []
+        # GPU 區塊：多來源模式每來源一列；單來源模式一列、不顯示來源名
         if isinstance(st["gpu_usage"], list):
-            # 多來源模式：每個來源一行
-            for item in st["gpu_usage"]:
-                usage = item["usage"]
-                if usage is not None:
-                    sub.append(f"GPU 使用率（{item['name']}）：{usage:.0f}%")
-                else:
-                    sub.append(f"GPU 使用率（{item['name']}）：N/A")
-        elif st["gpu_usage"] is not None:
-            sub.append(f"GPU 使用率：{st['gpu_usage']:.0f}%")
+            gpu_rows = "".join(_gpu_row_html(item["name"], item["usage"]) for item in st["gpu_usage"])
         else:
-            sub.append("GPU 使用率：N/A")
+            gpu_rows = _gpu_row_html(None, st["gpu_usage"])
+        info_rows = ""
         if st["last_active"] is not None:
-            sub.append(f"最後活動：{fmt_hms(st['last_active'])}")
-        sub.append(f"伺服器時間：{fmt_hms(now)}")
-        sub_html = "<br>".join(html.escape(s) for s in sub)
+            info_rows += _info_row_html("最後活動", fmt_hms(st["last_active"]))
+        info_rows += _info_row_html("伺服器時間", fmt_hms(now))
+        body = (
+            '<div class="head">DGX 模型使用狀態</div>'
+            f'<div class="status {cls}"><span class="dot"></span>{html.escape(line)}</div>'
+            f'<div class="gpu">{gpu_rows}</div>'
+            f'<div class="info">{info_rows}</div>'
+        )
     else:
-        line = "⚠ API 無回應"
-        cls = "down"
-        sub_html = f"連不上 {html.escape(METRICS_URL)}<br>伺服器時間：{fmt_hms(now)}"
+        body = (
+            '<div class="head">DGX 模型使用狀態</div>'
+            '<div class="status down"><span class="dot"></span>API 無回應</div>'
+            '<div class="info">'
+            + _info_row_html("連線目標", METRICS_URL, muted=True)
+            + _info_row_html("伺服器時間", fmt_hms(now), muted=True)
+            + "</div>"
+        )
 
-    return PAGE_TMPL.format(status=html.escape(line), cls=cls, sub=sub_html)
+    return PAGE_TMPL.format(body=body)
 
 
 class Handler(BaseHTTPRequestHandler):
