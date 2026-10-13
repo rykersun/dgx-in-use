@@ -4,7 +4,7 @@
 
 ## 專案用途
 
-顯示 DGX 叢集上 TensorFold 模型 API 目前使用狀態的小型 Docker 服務。兩人用手機瀏覽器打開頁面即可一眼判讀（使用中／閒置中／API 無回應），每 5 秒自動刷新（meta refresh），不必互相傳訊息確認。
+顯示 DGX 叢集上 TensorFold 模型 API 目前使用狀態的小型 Docker 服務。兩人用手機瀏覽器打開頁面即可一眼判讀（使用中／閒置中／API 無回應），自動刷新由內嵌 JS 輪詢 `/json` 實現（v1.4.0 起），不得移除輪詢或改回 meta refresh，不必互相傳訊息確認。
 
 ## 架構
 
@@ -50,7 +50,7 @@ curl http://localhost:8901/       # 出現中文狀態字樣（使用中／閒�
 
 ## 禁止事項
 
-- 不破壞自動刷新（`<meta http-equiv="refresh" content="5">`）。
+- 自動刷新由內嵌 JS 輪詢 `/json` 實現（v1.4.0 起），不得移除輪詢或改回 meta refresh。
 - 不破壞 last_active 持久化（原子寫入＋重啟讀回）。
 - 不破壞多 GPU 多來源容錯（單一來源失敗不影響其他行）。
 - 小改動不要順手重構。

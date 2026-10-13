@@ -2,6 +2,7 @@
 """dgx-in-use：顯示 TensorFold 模型 API 目前使用狀態的小型服務。
 
 只用 Python 標準庫，每次請求時即時抓 metrics endpoint 解析指標。
+前端頁面以內嵌 JS 每 5 秒輪詢 /json 無閃爍更新資料（v1.4.0 起，取代 meta refresh）。
 """
 
 import html
@@ -198,7 +199,6 @@ PAGE_TMPL = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="5">
 <meta name="theme-color" content="#0e1014">
 <title>DGX 模型使用狀態</title>
 <style>
@@ -211,6 +211,7 @@ PAGE_TMPL = """<!DOCTYPE html>
     justify-content: center;
     padding: 1.5rem;
     background: #0e1014;
+    transition: box-shadow 0.8s ease;
     color: #e6e9ef;
     font-family: -apple-system, "Noto Sans TC", "Microsoft JhengHei", sans-serif;
   }}
@@ -255,6 +256,40 @@ PAGE_TMPL = """<!DOCTYPE html>
   }}
   @media (prefers-reduced-motion: reduce) {{
     .in-use .dot, .in-use-warn .dot {{ animation: none; }}
+    body[data-status]::before {{ animation: none; }}  /* 停光暈脈動，保留靜態色調 */
+  }}
+  /* 狀態驅動光暈：box-shadow 為靜態色調（切換時 0.8s 過渡），::before 為脈動層；光暈不透明度 ≤ 0.25 */
+  body[data-status="in-use"] {{ box-shadow: inset 0 90px 110px -70px rgba(248, 113, 113, 0.10); }}
+  body[data-status="in-use-warn"] {{ box-shadow: inset 0 90px 110px -70px rgba(251, 191, 36, 0.10); }}
+  body[data-status="idle"] {{ box-shadow: inset 0 90px 110px -70px rgba(74, 222, 128, 0.08); }}
+  body::before {{
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.8s ease;
+  }}
+  body[data-status="in-use"]::before {{
+    background: radial-gradient(60% 40% at 50% 0%, rgba(248, 113, 113, 0.12), rgba(248, 113, 113, 0) 70%);
+    opacity: 0.6;
+    animation: glow 4s ease-in-out infinite;
+  }}
+  body[data-status="in-use-warn"]::before {{
+    background: radial-gradient(60% 40% at 50% 0%, rgba(251, 191, 36, 0.12), rgba(251, 191, 36, 0) 70%);
+    opacity: 0.6;
+    animation: glow 4s ease-in-out infinite;
+  }}
+  body[data-status="idle"]::before {{
+    background: radial-gradient(60% 40% at 50% 0%, rgba(74, 222, 128, 0.10), rgba(74, 222, 128, 0) 70%);
+    opacity: 0.5;
+    animation: glow 6s ease-in-out infinite;
+  }}
+  /* 無回應（down）：無光暈，維持靜態灰 */
+  @keyframes glow {{
+    0%, 100% {{ opacity: 0.3; }}
+    50% {{ opacity: 1; }}
   }}
   .gpu {{ margin-top: 1.75rem; }}
   .gpu-row + .gpu-row {{ margin-top: 1.1rem; }}
@@ -292,12 +327,227 @@ PAGE_TMPL = """<!DOCTYPE html>
   }}
   /* 無回應狀態：資訊值改用次要色 */
   .info-value.muted {{ color: #9aa3b2; }}
+  /* 連線中斷提示（輪詢失敗時顯示，.down 語意色） */
+  .conn {{
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    color: #9ca3af;
+  }}
 </style>
 </head>
-<body>
+<body data-status="{status}">
 <div class="card">
 {body}
 </div>
+<script>
+(function () {{
+  "use strict";
+  var POLL_MS = 5000;        // 輪詢間隔（毫秒）
+  var FETCH_TIMEOUT = 4000;  // 單次請求逾時
+  var FAIL_RELOAD = 6;       // 連續失敗達此次數就整頁重載
+  var STATUS_COLORS = {{
+    "in-use": "#f87171",
+    "in-use-warn": "#fbbf24",
+    "idle": "#4ade80",
+    "down": "#9ca3af"
+  }};
+
+  var statusEl = document.querySelector(".status");
+  var connEl = document.getElementById("conn");
+  var gpuEl = document.getElementById("gpu");
+  var themeEl = document.querySelector('meta[name="theme-color"]');
+
+  var failCount = 0;
+  var frozen = false;       // 斷線中：時間停格
+  var clockOffset = null;   // server-client 時鐘偏移（毫秒）
+  var lastGpuShape = null;  // 上次 GPU 區塊形狀（列數／名稱／是否 N/A）
+
+  var timeFmt = null;
+  try {{
+    timeFmt = new Intl.DateTimeFormat("zh-TW", {{
+      timeZone: "Asia/Taipei",
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    }});
+  }} catch (err) {{
+    timeFmt = null;  // 無該時區資料時改用 ISO fallback
+  }}
+
+  function fmtHms(ms) {{
+    if (timeFmt) return timeFmt.format(new Date(ms));
+    return new Date(ms + 8 * 3600000).toISOString().slice(11, 19);
+  }}
+
+  function escapeHtml(s) {{
+    var map = {{ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }};
+    return String(s).replace(/[&<>"']/g, function (c) {{ return map[c]; }});
+  }}
+
+  function statusInfo(d) {{
+    // 判定邏輯與後端 render_page 完全一致
+    if (!d.ok) return {{ cls: "down", text: "API 無回應" }};
+    if (d.requests_running > 0) {{
+      var text = "使用中：" + d.requests_running + " 個請求執行中";
+      if (d.requests_waiting > 0) text += "、" + d.requests_waiting + " 個排隊中";
+      return {{ cls: d.requests_waiting > 0 ? "in-use-warn" : "in-use", text: text }};
+    }}
+    return {{ cls: "idle", text: "閒置中（沒有請求）" }};
+  }}
+
+  function infoRow(label) {{
+    var rows = document.querySelectorAll(".info-row");
+    for (var i = 0; i < rows.length; i++) {{
+      var lab = rows[i].querySelector(".info-label");
+      if (lab && lab.textContent === label) return rows[i];
+    }}
+    return null;
+  }}
+
+  function gpuItems(d) {{
+    // gpu_usage 單來源是數字、多來源是 [{{name, usage}}]，統一成陣列處理
+    if (Array.isArray(d.gpu_usage)) return d.gpu_usage;
+    return [{{ name: null, usage: d.gpu_usage }}];
+  }}
+
+  function gpuShape(items) {{
+    // 列數、來源名、是否 N/A 任一改變就整區重建
+    return items.map(function (it) {{
+      return (it.name == null ? "" : it.name) + ":" + (it.usage == null ? "NA" : "num");
+    }}).join("|");
+  }}
+
+  function gpuRowHtml(name, usage) {{
+    // 與後端 _gpu_row_html 的 DOM 結構與 class 完全一致
+    var nameHtml = name ? '<span class="gpu-name">' + escapeHtml(name) + "</span>" : "";
+    var valHtml = "N/A";
+    var fillHtml = "";
+    if (usage != null) {{
+      valHtml = Math.round(usage) + "%";
+      var width = Math.max(0, Math.min(100, usage));
+      fillHtml = '<div class="gpu-fill" style="width:' + Math.round(width) + '%"></div>';
+    }}
+    return '<div class="gpu-row"><div class="gpu-head">' + nameHtml +
+      '<span class="gpu-usage">' + valHtml + "</span></div>" +
+      '<div class="gpu-bar">' + fillHtml + "</div></div>";
+  }}
+
+  function patchGpu(items) {{
+    // 只有數值變動：只改文字與進度條寬度，不整區重繪
+    var rows = gpuEl.querySelectorAll(".gpu-row");
+    for (var i = 0; i < rows.length && i < items.length; i++) {{
+      var usage = items[i].usage;
+      var valEl = rows[i].querySelector(".gpu-usage");
+      var fillEl = rows[i].querySelector(".gpu-fill");
+      if (usage == null) {{
+        valEl.textContent = "N/A";
+      }} else {{
+        valEl.textContent = Math.round(usage) + "%";
+        if (fillEl) fillEl.style.width = Math.max(0, Math.min(100, usage)) + "%";
+      }}
+    }}
+  }}
+
+  function applyData(d) {{
+    var st = statusInfo(d);
+    document.body.setAttribute("data-status", st.cls);
+    if (themeEl) themeEl.setAttribute("content", STATUS_COLORS[st.cls]);
+    if (statusEl) {{
+      statusEl.className = "status " + st.cls;
+      statusEl.innerHTML = '<span class="dot"></span>' + escapeHtml(st.text);
+    }}
+
+    if (d.ok) {{
+      // GPU 區塊（down 頁沒有此容器，回復時動態補上）
+      if (!gpuEl) {{
+        gpuEl = document.createElement("div");
+        gpuEl.id = "gpu";
+        gpuEl.className = "gpu";
+        var infoSec = document.querySelector(".info");
+        infoSec.parentNode.insertBefore(gpuEl, infoSec);
+      }}
+      gpuEl.style.display = "";
+      var items = gpuItems(d);
+      var shape = gpuShape(items);
+      if (shape !== lastGpuShape) {{
+        gpuEl.innerHTML = items.map(function (it) {{ return gpuRowHtml(it.name, it.usage); }}).join("");
+        lastGpuShape = shape;
+      }} else {{
+        patchGpu(items);
+      }}
+
+      // 最後活動：後端初始渲染沒有此列（last_active 為 null）時動態補上
+      if (d.last_active != null) {{
+        var laRow = infoRow("最後活動");
+        if (!laRow) {{
+          laRow = document.createElement("div");
+          laRow.className = "info-row";
+          laRow.innerHTML = '<span class="info-label">最後活動</span><span class="info-value"></span>';
+          var stRow = infoRow("伺服器時間");
+          stRow.parentNode.insertBefore(laRow, stRow);
+        }}
+        laRow.style.display = "";
+        laRow.querySelector(".info-value").textContent = fmtHms(d.last_active * 1000);
+      }}
+    }} else {{
+      // 無回應：與後端 down 渲染一致，收起 GPU 區塊與最後活動列
+      if (gpuEl) gpuEl.style.display = "none";
+      var laRow2 = infoRow("最後活動");
+      if (laRow2) laRow2.style.display = "none";
+    }}
+
+    // 伺服器時間：記下時鐘偏移並立即更新一次
+    if (typeof d.server_time === "number") {{
+      clockOffset = d.server_time * 1000 - Date.now();
+      var nowRow = infoRow("伺服器時間");
+      if (nowRow) nowRow.querySelector(".info-value").textContent = fmtHms(d.server_time * 1000);
+    }}
+  }}
+
+  function poll() {{
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () {{ ctrl.abort(); }}, FETCH_TIMEOUT);
+    fetch("/json", {{ cache: "no-store", signal: ctrl.signal }})
+      .then(function (r) {{ return r.json(); }})
+      .then(function (d) {{
+        clearTimeout(timer);
+        failCount = 0;
+        frozen = false;
+        if (connEl) connEl.hidden = true;
+        applyData(d);
+      }})
+      .catch(function () {{
+        clearTimeout(timer);
+        failCount += 1;
+        frozen = true;  // 時間停格，不清空畫面既有資料
+        if (connEl) connEl.hidden = false;
+        if (failCount >= FAIL_RELOAD) location.reload();
+      }});
+  }}
+
+  function tickClock() {{
+    if (document.hidden || frozen || clockOffset == null) return;
+    var row = infoRow("伺服器時間");
+    if (row) {{
+      var v = row.querySelector(".info-value");
+      if (v) v.textContent = fmtHms(Date.now() + clockOffset);
+    }}
+  }}
+
+  function loop() {{
+    if (!document.hidden) poll();  // 分頁隱藏時暫停輪詢
+  }}
+
+  setInterval(loop, POLL_MS);
+  setInterval(tickClock, 1000);
+  document.addEventListener("visibilitychange", function () {{
+    if (!document.hidden) loop();  // 恢復可見立即輪詢一次
+  }});
+
+  loop();  // 載入立即抓一次，同步時鐘
+}})();
+</script>
 </body>
 </html>"""
 
@@ -358,20 +608,23 @@ def render_page(st):
         body = (
             '<div class="head">DGX 模型使用狀態</div>'
             f'<div class="status {cls}"><span class="dot"></span>{html.escape(line)}</div>'
-            f'<div class="gpu">{gpu_rows}</div>'
+            '<div class="conn" id="conn" hidden>連線中斷，重試中…</div>'
+            f'<div class="gpu" id="gpu">{gpu_rows}</div>'
             f'<div class="info">{info_rows}</div>'
         )
     else:
+        cls = "down"
         body = (
             '<div class="head">DGX 模型使用狀態</div>'
             '<div class="status down"><span class="dot"></span>API 無回應</div>'
+            '<div class="conn" id="conn" hidden>連線中斷，重試中…</div>'
             '<div class="info">'
             + _info_row_html("連線目標", METRICS_URL, muted=True)
             + _info_row_html("伺服器時間", fmt_hms(now), muted=True)
             + "</div>"
         )
 
-    return PAGE_TMPL.format(body=body)
+    return PAGE_TMPL.format(body=body, status=cls)
 
 
 class Handler(BaseHTTPRequestHandler):
