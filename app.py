@@ -222,6 +222,20 @@ PAGE_TMPL = """<!DOCTYPE html>
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 16px;
     padding: 2.5rem 2rem;
+    transition: border-color 0.8s ease, box-shadow 0.8s ease;
+  }}
+  /* 卡片同色系微光：跟隨狀態色（down 無額外規則，維持素卡） */
+  body[data-status="in-use"] .card {{
+    border-color: rgba(248, 113, 113, 0.35);
+    box-shadow: 0 0 60px rgba(248, 113, 113, 0.20);
+  }}
+  body[data-status="in-use-warn"] .card {{
+    border-color: rgba(251, 191, 36, 0.35);
+    box-shadow: 0 0 60px rgba(251, 191, 36, 0.20);
+  }}
+  body[data-status="idle"] .card {{
+    border-color: rgba(74, 222, 128, 0.25);
+    box-shadow: 0 0 60px rgba(74, 222, 128, 0.14);
   }}
   .head {{
     font-size: 0.8rem;
@@ -258,10 +272,11 @@ PAGE_TMPL = """<!DOCTYPE html>
     .in-use .dot, .in-use-warn .dot {{ animation: none; }}
     body[data-status]::before {{ animation: none; }}  /* 停光暈脈動，保留靜態色調 */
   }}
-  /* 狀態驅動光暈：box-shadow 為靜態色調（切換時 0.8s 過渡），::before 為脈動層；光暈不透明度 ≤ 0.25 */
-  body[data-status="in-use"] {{ box-shadow: inset 0 90px 110px -70px rgba(248, 113, 113, 0.10); }}
-  body[data-status="in-use-warn"] {{ box-shadow: inset 0 90px 110px -70px rgba(251, 191, 36, 0.10); }}
-  body[data-status="idle"] {{ box-shadow: inset 0 90px 110px -70px rgba(74, 222, 128, 0.08); }}
+  /* 狀態驅動光暈：::before 為脈動光暈層（覆蓋視窗上半部），body inset box-shadow 為靜態色調（切換時 0.8s 過渡）；
+     有效不透明度上限 0.55（v1.4.1 放寬）。規則內的 opacity 為 reduced-motion 停用動畫時的靜態色調。 */
+  body[data-status="in-use"] {{ box-shadow: inset 0 120px 140px -80px rgba(248, 113, 113, 0.20); }}
+  body[data-status="in-use-warn"] {{ box-shadow: inset 0 120px 140px -80px rgba(251, 191, 36, 0.20); }}
+  body[data-status="idle"] {{ box-shadow: inset 0 120px 140px -80px rgba(74, 222, 128, 0.14); }}
   body::before {{
     content: "";
     position: fixed;
@@ -272,24 +287,32 @@ PAGE_TMPL = """<!DOCTYPE html>
     transition: opacity 0.8s ease;
   }}
   body[data-status="in-use"]::before {{
-    background: radial-gradient(60% 40% at 50% 0%, rgba(248, 113, 113, 0.12), rgba(248, 113, 113, 0) 70%);
-    opacity: 0.6;
-    animation: glow 4s ease-in-out infinite;
+    background: radial-gradient(120% 55% at 50% 0%, rgba(248, 113, 113, 1), rgba(248, 113, 113, 0) 70%);
+    opacity: 0.4;
+    animation: glow-in-use 3s ease-in-out infinite;
   }}
   body[data-status="in-use-warn"]::before {{
-    background: radial-gradient(60% 40% at 50% 0%, rgba(251, 191, 36, 0.12), rgba(251, 191, 36, 0) 70%);
-    opacity: 0.6;
-    animation: glow 4s ease-in-out infinite;
+    background: radial-gradient(120% 55% at 50% 0%, rgba(251, 191, 36, 1), rgba(251, 191, 36, 0) 70%);
+    opacity: 0.4;
+    animation: glow-warn 2.2s ease-in-out infinite;
   }}
   body[data-status="idle"]::before {{
-    background: radial-gradient(60% 40% at 50% 0%, rgba(74, 222, 128, 0.10), rgba(74, 222, 128, 0) 70%);
-    opacity: 0.5;
-    animation: glow 6s ease-in-out infinite;
+    background: radial-gradient(120% 55% at 50% 0%, rgba(74, 222, 128, 1), rgba(74, 222, 128, 0) 70%);
+    opacity: 0.25;
+    animation: glow-idle 7s ease-in-out infinite;
   }}
   /* 無回應（down）：無光暈，維持靜態灰 */
-  @keyframes glow {{
-    0%, 100% {{ opacity: 0.3; }}
-    50% {{ opacity: 1; }}
+  @keyframes glow-in-use {{
+    0%, 100% {{ opacity: 0.25; }}
+    50% {{ opacity: 0.55; }}
+  }}
+  @keyframes glow-warn {{
+    0%, 100% {{ opacity: 0.25; }}
+    50% {{ opacity: 0.55; }}
+  }}
+  @keyframes glow-idle {{
+    0%, 100% {{ opacity: 0.15; }}
+    50% {{ opacity: 0.35; }}
   }}
   .gpu {{ margin-top: 1.75rem; }}
   .gpu-row + .gpu-row {{ margin-top: 1.1rem; }}
@@ -308,7 +331,14 @@ PAGE_TMPL = """<!DOCTYPE html>
     background: rgba(255, 255, 255, 0.06);
     overflow: hidden;
   }}
-  .gpu-fill {{ height: 100%; border-radius: 999px; background: #e6e9ef; }}
+  .gpu-fill {{
+    height: 100%;
+    border-radius: 999px;
+    background: #e6e9ef;
+    transition: width 1.4s cubic-bezier(0.22, 1, 0.36, 1);
+  }}
+  /* 整區重建時新 fill 先免動畫設初始寬度，下一個 frame 由 JS 移除此 class */
+  .gpu-fill.no-anim {{ transition: none; }}
   .info {{ margin-top: 1.75rem; }}
   .info-row {{
     display: flex;
@@ -426,7 +456,7 @@ PAGE_TMPL = """<!DOCTYPE html>
     if (usage != null) {{
       valHtml = Math.round(usage) + "%";
       var width = Math.max(0, Math.min(100, usage));
-      fillHtml = '<div class="gpu-fill" style="width:' + Math.round(width) + '%"></div>';
+      fillHtml = '<div class="gpu-fill no-anim" style="width:' + Math.round(width) + '%"></div>';
     }}
     return '<div class="gpu-row"><div class="gpu-head">' + nameHtml +
       '<span class="gpu-usage">' + valHtml + "</span></div>" +
@@ -473,6 +503,11 @@ PAGE_TMPL = """<!DOCTYPE html>
       if (shape !== lastGpuShape) {{
         gpuEl.innerHTML = items.map(function (it) {{ return gpuRowHtml(it.name, it.usage); }}).join("");
         lastGpuShape = shape;
+        // 重建的新 fill 不從 0 動畫起跳：先無 transition 設定初始寬度，下一個 frame 再恢復
+        requestAnimationFrame(function () {{
+          var fills = gpuEl.querySelectorAll(".gpu-fill.no-anim");
+          for (var i = 0; i < fills.length; i++) fills[i].classList.remove("no-anim");
+        }});
       }} else {{
         patchGpu(items);
       }}
