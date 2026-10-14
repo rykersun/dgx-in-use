@@ -8,9 +8,9 @@
 
 ## 架構
 
-- `app.py`：純 Python 標準庫（`http.server`，無第三方依賴），每次請求時即時抓 metrics endpoint 解析，不做背景輪詢。
+- `app.py`：純 Python 標準庫（`http.server`，無第三方依賴），每次請求時即時抓 metrics endpoint 解析，不做背景輪詢（v1.5.0 起的 24 小時歷史取樣 daemon thread 除外）。
 - `Dockerfile`：`python:3-alpine` ＋ `apk add tzdata`（`ENV TZ=Asia/Taipei`）。
-- `docker-compose.yml`：單一服務，掛載 `./data:/data` 以持久化 last_active。
+- `docker-compose.yml`：單一服務，掛載 `./data:/data` 以持久化 last_active 與歷史紀錄。
 
 ## 環境變數
 
@@ -22,6 +22,7 @@
 | `GPU_STATS_URL` | 單一 GPU 來源（向下相容；未設 `GPU_STATS_URLS` 時使用），預設 glances `http://dgx-host:61208/api/4/gpu` |
 | `TZ` | 時區，固定 `Asia/Taipei` |
 | `LAST_ACTIVE_FILE` | last_active 持久化路徑，預設 `/data/last_active.json` |
+| `HISTORY_FILE` | 24 小時歷史紀錄持久化路徑，預設 `/data/history.json`（5 分鐘一桶、保留 25 小時） |
 
 本機真實內網位址放在 `docker-compose.override.yml`（已 gitignore），compose 會自動疊加在 `docker-compose.yml` 之上；repo 內一律只放 `dgx-host`／`dgx-host-2` 佔位符，**不要把真實 IP 寫回 tracked 檔案**。
 

@@ -3,12 +3,14 @@
 
 只用 Python 標準庫，每次請求時即時抓 metrics endpoint 解析指標。
 前端頁面以內嵌 JS 每 5 秒輪詢 /json 無閃爍更新資料（v1.4.0 起，取代 meta refresh）。
+另有一條背景 daemon thread 每 60 秒取樣 metrics，記錄 24 小時使用歷史（v1.5.0 起）。
 """
 
 import html
 import json
 import os
 import re
+import threading
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +29,25 @@ FETCH_TIMEOUT = 3  # 抓 metrics / GPU 的逾時秒數
 
 # last_active 持久化路徑（掛載 volume 以便重啟保留）
 LAST_ACTIVE_FILE = os.environ.get("LAST_ACTIVE_FILE", "/data/last_active.json")
+
+# 24 小時使用歷史（v1.5.0）：背景 daemon thread 每 60 秒取樣一次 metrics，
+# 記錄成 5 分鐘一桶的四狀態紀錄；HISTORY_FILE 掛載 volume 以便重啟保留
+HISTORY_FILE = os.environ.get("HISTORY_FILE", "/data/history.json")
+HISTORY_BUCKET_SECONDS = 300  # 5 分鐘一桶（桶 key 為取樣時間整除 300）
+HISTORY_RETENTION_SECONDS = 25 * 3600  # 保留 25 小時（顯示 24h＋緩衝）
+HISTORY_SAMPLE_INTERVAL = 60  # 取樣間隔（秒）
+# 同桶多狀態時的聚合優先序：偏向顯示「有活動」
+HISTORY_STATUS_PRIORITY = ("in-use-warn", "in-use", "idle", "down")
+# 各狀態的顯示用文字（span title 屬性用）
+HISTORY_STATUS_TEXT = {
+    "in-use": "使用中",
+    "in-use-warn": "使用中（排隊中）",
+    "idle": "閒置中",
+    "down": "API 無回應",
+}
+
+history_buckets = {}  # {桶起始 unix_ts: 狀態}
+_sample_stop = threading.Event()  # 預留未來優雅停止取樣執行緒之用
 
 # 顯示用時區：一律 Asia/Taipei（UTC+8）；缺 tzdata 時退回系統本地時區
 try:
@@ -67,6 +88,13 @@ def fmt_hms(ts):
     if DISPLAY_TZ is not None:
         return datetime.fromtimestamp(ts, DISPLAY_TZ).strftime("%H:%M:%S")
     return time.strftime("%H:%M:%S", time.localtime(ts))
+
+
+def _fmt_hm(ts):
+    """把 unix timestamp 轉成 Asia/Taipei 的 HH:MM（歷史橫條標籤用）。"""
+    if DISPLAY_TZ is not None:
+        return datetime.fromtimestamp(ts, DISPLAY_TZ).strftime("%H:%M")
+    return time.strftime("%H:%M", time.localtime(ts))
 
 
 def fetch_metrics():
@@ -192,6 +220,118 @@ def get_status():
         "last_active": last_active_ts,
         "server_time": time.time(),
     }
+
+
+def load_history():
+    """啟動時從檔案讀回歷史桶；讀不到或格式錯就從空開始。"""
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            for ts, status in json.load(f)["buckets"]:
+                if status in HISTORY_STATUS_TEXT:  # 擋掉損壞檔中的未知狀態
+                    history_buckets[int(ts)] = status
+    except Exception:
+        pass
+
+
+def save_history():
+    """把歷史桶原子寫入檔案（.tmp + os.replace）；失敗只靜默忽略，不影響服務。"""
+    try:
+        d = os.path.dirname(HISTORY_FILE)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        tmp = HISTORY_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"buckets": sorted(history_buckets.items())}, f)
+        os.replace(tmp, HISTORY_FILE)
+    except Exception:
+        pass
+
+
+def record_history_sample(status):
+    """記錄一次取樣：後寫覆蓋，但同桶多狀態時偏好「有活動」的狀態。
+
+    寫入前修剪超過保留期（25 小時）的桶。
+    """
+    now = time.time()
+    bucket = int(now) // HISTORY_BUCKET_SECONDS * HISTORY_BUCKET_SECONDS
+    old = history_buckets.get(bucket)
+    if old is None or HISTORY_STATUS_PRIORITY.index(status) < HISTORY_STATUS_PRIORITY.index(old):
+        history_buckets[bucket] = status
+    cutoff = now - HISTORY_RETENTION_SECONDS
+    for ts in [ts for ts in history_buckets if ts < cutoff]:
+        del history_buckets[ts]
+    save_history()
+
+
+def sample_history_once():
+    """取樣一次：只抓 metrics（不抓 GPU），分類成四狀態（與 render_page 一致）。"""
+    metrics, err = fetch_metrics()
+    if err is not None:
+        record_history_sample("down")
+        return
+
+    def first(name):
+        vals = metrics.get(name)
+        return next(iter(vals.values())) if vals else 0
+
+    running = int(first("tensorfold:requests_running"))
+    waiting = int(first("tensorfold:requests_waiting"))
+    if running > 0:
+        record_history_sample("in-use-warn" if waiting > 0 else "in-use")
+    else:
+        record_history_sample("idle")
+
+
+def _history_loop():
+    """背景取樣執行緒主體：任何例外只靜默略過該次取樣，絕不讓服務掛掉。"""
+    while True:
+        try:
+            sample_history_once()
+        except Exception:
+            pass
+        _sample_stop.wait(HISTORY_SAMPLE_INTERVAL)
+
+
+def history_payload():
+    """組出 /json 的 history 欄位：最近 24 小時的桶，時間正序。"""
+    cutoff = time.time() - 24 * 3600
+    points = [[ts, s] for ts, s in sorted(history_buckets.items()) if ts >= cutoff]
+    return {"bucket_seconds": HISTORY_BUCKET_SECONDS, "points": points}
+
+
+HISTORY_SLOTS = 24 * 3600 // HISTORY_BUCKET_SECONDS  # 24h 橫條的格數（288）
+
+
+def _history_spans_html(points, now):
+    """產生 24h × 5min 的 span 列；缺資料的桶用透明 span 佔位。"""
+    by_ts = dict(points)
+    now_bucket = int(now) // HISTORY_BUCKET_SECONDS * HISTORY_BUCKET_SECONDS
+    parts = []
+    for i in range(HISTORY_SLOTS - 1, -1, -1):
+        ts = now_bucket - i * HISTORY_BUCKET_SECONDS
+        st = by_ts.get(ts)
+        if st is None:
+            parts.append("<span></span>")
+        else:
+            title = f"{_fmt_hm(ts)} {HISTORY_STATUS_TEXT[st]}"
+            parts.append(f'<span class="hb-{st}" title="{html.escape(title)}"></span>')
+    return "".join(parts)
+
+
+def _history_block_html(now):
+    """產生整個 24 小時歷史區塊；尚無資料時顯示「資料收集中…」小字。"""
+    points = history_payload()["points"]
+    head = '<div class="history-head"><span class="history-label">24 小時紀錄</span>'
+    if not points:
+        return (
+            '<div class="history" id="history">' + head + "</div>"
+            '<div class="history-empty">資料收集中…</div></div>'
+        )
+    head += f'<span class="history-range">最舊 {_fmt_hm(points[0][0])} – 現在</span></div>'
+    return (
+        '<div class="history" id="history">' + head
+        + f'<div class="history-bar">{_history_spans_html(points, now)}</div></div>'
+    )
 
 
 PAGE_TMPL = """<!DOCTYPE html>
@@ -339,6 +479,35 @@ PAGE_TMPL = """<!DOCTYPE html>
   }}
   /* 整區重建時新 fill 先免動畫設初始寬度，下一個 frame 由 JS 移除此 class */
   .gpu-fill.no-anim {{ transition: none; }}
+  /* 24 小時使用紀錄（v1.5.0）：每 5 分鐘一桶的狀態橫條 */
+  .history {{ margin-top: 1.75rem; }}
+  .history-head {{
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    margin-bottom: 0.55rem;
+  }}
+  .history-label {{ font-size: 0.85rem; color: #9aa3b2; }}
+  .history-range {{
+    margin-left: auto;
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
+    font-size: 0.75rem;
+    color: #9aa3b2;
+  }}
+  .history-bar {{
+    display: flex;
+    gap: 1px;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    overflow: hidden;
+  }}
+  .history-bar span {{ flex: 1 1 0; min-width: 0; }}
+  .hb-in-use {{ background: rgba(248, 113, 113, 0.85); }}
+  .hb-in-use-warn {{ background: rgba(251, 191, 36, 0.85); }}
+  .hb-idle {{ background: rgba(74, 222, 128, 0.85); }}
+  .hb-down {{ background: rgba(156, 163, 175, 0.85); }}
+  .history-empty {{ font-size: 0.75rem; color: #9aa3b2; }}
   .info {{ margin-top: 1.75rem; }}
   .info-row {{
     display: flex;
@@ -385,12 +554,27 @@ PAGE_TMPL = """<!DOCTYPE html>
   var statusEl = document.querySelector(".status");
   var connEl = document.getElementById("conn");
   var gpuEl = document.getElementById("gpu");
+  var historyEl = document.getElementById("history");
   var themeEl = document.querySelector('meta[name="theme-color"]');
 
   var failCount = 0;
-  var frozen = false;       // 斷線中：時間停格
-  var clockOffset = null;   // server-client 時鐘偏移（毫秒）
-  var lastGpuShape = null;  // 上次 GPU 區塊形狀（列數／名稱／是否 N/A）
+  var frozen = false;        // 斷線中：時間停格
+  var clockOffset = null;    // server-client 時鐘偏移（毫秒）
+  var lastGpuShape = null;   // 上次 GPU 區塊形狀（列數／名稱／是否 N/A）
+  var lastHistorySig = null; // 上次歷史資料簽章（變了才重建 DOM）
+  var HISTORY_SLOTS = 288;   // 24h ÷ 5min 的格數
+  var HISTORY_CLASSES = {{
+    "in-use": "hb-in-use",
+    "in-use-warn": "hb-in-use-warn",
+    "idle": "hb-idle",
+    "down": "hb-down"
+  }};
+  var HISTORY_TEXT = {{
+    "in-use": "使用中",
+    "in-use-warn": "使用中（排隊中）",
+    "idle": "閒置中",
+    "down": "API 無回應"
+  }};
 
   var timeFmt = null;
   try {{
@@ -479,6 +663,38 @@ PAGE_TMPL = """<!DOCTYPE html>
     }}
   }}
 
+  function updateHistory(points) {{
+    // 只在資料簽章（桶數或任一狀態）改變時重建 innerHTML，避免每 5 秒重繪 288 個 span
+    var sig = points.map(function (p) {{ return p.join(":"); }}).join("|");
+    if (sig === lastHistorySig) return;
+    lastHistorySig = sig;
+    var head = '<div class="history-head"><span class="history-label">24 小時紀錄</span>';
+    if (!points.length) {{
+      historyEl.innerHTML = head + '</div><div class="history-empty">資料收集中…</div>';
+      return;
+    }}
+    var byTs = {{}};
+    for (var i = 0; i < points.length; i++) byTs[points[i][0]] = points[i][1];
+    // 以 server 時鐘（clockOffset）對齊目前的 5 分鐘桶
+    var nowMs = clockOffset == null ? Date.now() : Date.now() + clockOffset;
+    var nowBucket = Math.floor(nowMs / 1000 / 300) * 300;
+    var spans = "";
+    for (var i = HISTORY_SLOTS - 1; i >= 0; i--) {{
+      var ts = nowBucket - i * 300;
+      var st = byTs[ts];
+      if (st) {{
+        spans += '<span class="' + HISTORY_CLASSES[st] + '" title="' +
+          fmtHms(ts * 1000).slice(0, 5) + " " + HISTORY_TEXT[st] + '"></span>';
+      }} else {{
+        spans += "<span></span>";
+      }}
+    }}
+    historyEl.innerHTML = head +
+      '<span class="history-range">最舊 ' + fmtHms(points[0][0] * 1000).slice(0, 5) +
+      " – 現在</span></div>" +
+      '<div class="history-bar">' + spans + "</div>";
+  }}
+
   function applyData(d) {{
     var st = statusInfo(d);
     document.body.setAttribute("data-status", st.cls);
@@ -537,6 +753,11 @@ PAGE_TMPL = """<!DOCTYPE html>
       clockOffset = d.server_time * 1000 - Date.now();
       var nowRow = infoRow("伺服器時間");
       if (nowRow) nowRow.querySelector(".info-value").textContent = fmtHms(d.server_time * 1000);
+    }}
+
+    // 24 小時歷史（down 時歷史照常回，維持顯示）
+    if (historyEl && d.history && Array.isArray(d.history.points)) {{
+      updateHistory(d.history.points);
     }}
   }}
 
@@ -645,7 +866,8 @@ def render_page(st):
             f'<div class="status {cls}"><span class="dot"></span>{html.escape(line)}</div>'
             '<div class="conn" id="conn" hidden>連線中斷，重試中…</div>'
             f'<div class="gpu" id="gpu">{gpu_rows}</div>'
-            f'<div class="info">{info_rows}</div>'
+            + _history_block_html(now)
+            + f'<div class="info">{info_rows}</div>'
         )
     else:
         cls = "down"
@@ -653,7 +875,8 @@ def render_page(st):
             '<div class="head">DGX 模型使用狀態</div>'
             '<div class="status down"><span class="dot"></span>API 無回應</div>'
             '<div class="conn" id="conn" hidden>連線中斷，重試中…</div>'
-            '<div class="info">'
+            + _history_block_html(now)
+            + '<div class="info">'
             + _info_row_html("連線目標", METRICS_URL, muted=True)
             + _info_row_html("伺服器時間", fmt_hms(now), muted=True)
             + "</div>"
@@ -672,6 +895,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/json":
             st = get_status()
+            st["history"] = history_payload()  # 既有欄位不動，只新增 history
             body = json.dumps(st, ensure_ascii=False).encode("utf-8")
             self._send(200, body, "application/json; charset=utf-8")
         elif self.path == "/":
@@ -688,6 +912,8 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     last_active_ts = load_last_active()
+    load_history()
+    threading.Thread(target=_history_loop, daemon=True).start()  # 歷史取樣，隨進程結束
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"dgx-in-use 啟動於 0.0.0.0:{PORT}，指標來源：{METRICS_URL}")
     server.serve_forever()
