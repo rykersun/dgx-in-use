@@ -360,7 +360,7 @@ def _history_block_html(now):
     )
     head += f'<span class="history-stat">{_fmt_usage_minutes(minutes)}</span></div>'
     axis = (
-        f'<div class="history-axis"><span>{_fmt_hm(now - 24 * 3600)}</span>'
+        f'<div class="history-axis"><span>{_fmt_hm(now - 24 * 3600)}（24 小時前）</span>'
         "<span>現在</span></div>"
     )
     return (
@@ -448,41 +448,39 @@ PAGE_TMPL = """<!DOCTYPE html>
     .in-use .dot, .in-use-warn .dot {{ animation: none; }}
     body[data-status]::before {{ animation: none; }}  /* 停光暈漂移，保留靜態色調 */
   }}
-  /* 狀態驅動光暈：::before 為漂移光暈層（radial 中心在卡片後方、緩慢游走無脈動），body inset box-shadow 為四邊環境光（切換時 0.8s 過渡）；
+  /* 狀態驅動光暈：::before 為卡片周圍的漂移光暈層（v1.7.3 起限縮範圍，背景維持純暗色）；
      規則內的 opacity 為 reduced-motion 停用動畫時的靜態色調。 */
-  body[data-status="in-use"] {{ box-shadow: inset 0 0 220px -90px rgba(248, 113, 113, 0.14); }}
-  body[data-status="in-use-warn"] {{ box-shadow: inset 0 0 220px -90px rgba(251, 191, 36, 0.14); }}
-  body[data-status="idle"] {{ box-shadow: inset 0 0 220px -90px rgba(74, 222, 128, 0.10); }}
   body::before {{
     content: "";
     position: fixed;
-    inset: -12%;  /* 比視窗大，漂移時不露邊 */
+    inset: 0;
     z-index: -1;
     pointer-events: none;
     opacity: 0;
     transition: opacity 0.8s ease;
   }}
-  /* 動態為「緩慢漂移」：光暈雲緩慢游走，無不透明度脈動（v1.7.2）；速度分級＝活動越頻繁越快 */
+  /* 動態為「緩慢漂移」：光暈雲緩慢游走，無不透明度脈動（v1.7.2）；速度分級＝活動越頻繁越快。
+     v1.7.3：光暈限縮在卡片周圍（px 定尺寸、可微溢出），背景本體維持固定暗色。 */
   body[data-status="in-use"]::before {{
-    background: radial-gradient(70% 55% at 50% 45%, rgba(248, 113, 113, 1), rgba(248, 113, 113, 0) 85%);
+    background: radial-gradient(560px 420px at 50% 45%, rgba(248, 113, 113, 1), rgba(248, 113, 113, 0) 85%);
     opacity: 0.2;
     animation: drift 16s ease-in-out infinite;
   }}
   body[data-status="in-use-warn"]::before {{
-    background: radial-gradient(70% 55% at 50% 45%, rgba(251, 191, 36, 1), rgba(251, 191, 36, 0) 85%);
+    background: radial-gradient(560px 420px at 50% 45%, rgba(251, 191, 36, 1), rgba(251, 191, 36, 0) 85%);
     opacity: 0.2;
     animation: drift 10s ease-in-out infinite;
   }}
   body[data-status="idle"]::before {{
-    background: radial-gradient(70% 55% at 50% 45%, rgba(74, 222, 128, 1), rgba(74, 222, 128, 0) 85%);
+    background: radial-gradient(560px 420px at 50% 45%, rgba(74, 222, 128, 1), rgba(74, 222, 128, 0) 85%);
     opacity: 0.12;
     animation: drift 32s ease-in-out infinite;
   }}
   /* 無回應（down）：無光暈，維持靜態灰 */
   @keyframes drift {{
-    0%, 100% {{ transform: translate3d(-2.5%, 1.5%, 0); }}
-    30% {{ transform: translate3d(2%, -2%, 0); }}
-    65% {{ transform: translate3d(1.5%, 2.5%, 0); }}
+    0%, 100% {{ transform: translate3d(-14px, 8px, 0); }}
+    30% {{ transform: translate3d(12px, -10px, 0); }}
+    65% {{ transform: translate3d(8px, 14px, 0); }}
   }}
   .gpu {{ margin-top: 1.75rem; }}
   .gpu-row + .gpu-row {{ margin-top: 1.1rem; }}
@@ -765,8 +763,7 @@ PAGE_TMPL = """<!DOCTYPE html>
     historyEl.innerHTML = head +
       '<span class="history-stat">' + stat + "</span></div>" +
       '<div class="history-bar">' + spans + "</div>" +
-      '<div class="history-axis"><span>' + fmtHms(nowMs - 24 * 3600 * 1000).slice(0, 5) +
-      "</span><span>現在</span></div>";
+      '<div class="history-axis"><span>' + fmtHms(nowMs - 24 * 3600 * 1000).slice(0, 5) + "（24 小時前）</span><span>現在</span></div>";
   }}
 
   function applyData(d) {{
