@@ -327,7 +327,7 @@ def _history_block_html(now):
             '<div class="history" id="history">' + head + "</div>"
             '<div class="history-empty">資料收集中…</div></div>'
         )
-    head += f'<span class="history-range">最舊 {_fmt_hm(points[0][0])} – 現在</span></div>'
+    head += f'<span class="history-range">{_fmt_hm(now - 24 * 3600)} – 現在</span></div>'
     return (
         '<div class="history" id="history">' + head
         + f'<div class="history-bar">{_history_spans_html(points, now)}</div></div>'
@@ -414,9 +414,9 @@ PAGE_TMPL = """<!DOCTYPE html>
   }}
   /* 狀態驅動光暈：::before 為脈動光暈層（radial 中心在卡片後方，形成環繞光暈而非僅頂部），body inset box-shadow 為四邊環境光（切換時 0.8s 過渡）；
      有效不透明度上限 0.55（v1.4.1 放寬）。規則內的 opacity 為 reduced-motion 停用動畫時的靜態色調。 */
-  body[data-status="in-use"] {{ box-shadow: inset 0 0 180px -60px rgba(248, 113, 113, 0.20); }}
-  body[data-status="in-use-warn"] {{ box-shadow: inset 0 0 180px -60px rgba(251, 191, 36, 0.20); }}
-  body[data-status="idle"] {{ box-shadow: inset 0 0 180px -60px rgba(74, 222, 128, 0.14); }}
+  body[data-status="in-use"] {{ box-shadow: inset 0 0 220px -90px rgba(248, 113, 113, 0.14); }}
+  body[data-status="in-use-warn"] {{ box-shadow: inset 0 0 220px -90px rgba(251, 191, 36, 0.14); }}
+  body[data-status="idle"] {{ box-shadow: inset 0 0 220px -90px rgba(74, 222, 128, 0.10); }}
   body::before {{
     content: "";
     position: fixed;
@@ -427,32 +427,32 @@ PAGE_TMPL = """<!DOCTYPE html>
     transition: opacity 0.8s ease;
   }}
   body[data-status="in-use"]::before {{
-    background: radial-gradient(85% 65% at 50% 45%, rgba(248, 113, 113, 1), rgba(248, 113, 113, 0) 70%);
-    opacity: 0.4;
+    background: radial-gradient(120% 90% at 50% 45%, rgba(248, 113, 113, 1), rgba(248, 113, 113, 0) 85%);
+    opacity: 0.2;
     animation: glow-in-use 3s ease-in-out infinite;
   }}
   body[data-status="in-use-warn"]::before {{
-    background: radial-gradient(85% 65% at 50% 45%, rgba(251, 191, 36, 1), rgba(251, 191, 36, 0) 70%);
-    opacity: 0.4;
+    background: radial-gradient(120% 90% at 50% 45%, rgba(251, 191, 36, 1), rgba(251, 191, 36, 0) 85%);
+    opacity: 0.2;
     animation: glow-warn 2.2s ease-in-out infinite;
   }}
   body[data-status="idle"]::before {{
-    background: radial-gradient(85% 65% at 50% 45%, rgba(74, 222, 128, 1), rgba(74, 222, 128, 0) 70%);
-    opacity: 0.25;
+    background: radial-gradient(120% 90% at 50% 45%, rgba(74, 222, 128, 1), rgba(74, 222, 128, 0) 85%);
+    opacity: 0.12;
     animation: glow-idle 7s ease-in-out infinite;
   }}
   /* 無回應（down）：無光暈，維持靜態灰 */
   @keyframes glow-in-use {{
-    0%, 100% {{ opacity: 0.25; }}
-    50% {{ opacity: 0.55; }}
+    0%, 100% {{ opacity: 0.12; }}
+    50% {{ opacity: 0.30; }}
   }}
   @keyframes glow-warn {{
-    0%, 100% {{ opacity: 0.25; }}
-    50% {{ opacity: 0.55; }}
+    0%, 100% {{ opacity: 0.12; }}
+    50% {{ opacity: 0.30; }}
   }}
   @keyframes glow-idle {{
-    0%, 100% {{ opacity: 0.15; }}
-    50% {{ opacity: 0.35; }}
+    0%, 100% {{ opacity: 0.08; }}
+    50% {{ opacity: 0.20; }}
   }}
   .gpu {{ margin-top: 1.75rem; }}
   .gpu-row + .gpu-row {{ margin-top: 1.1rem; }}
@@ -558,17 +558,12 @@ PAGE_TMPL = """<!DOCTYPE html>
     body[data-status="idle"] #spotlight {{ --spot-color: rgba(74, 222, 128, 0.08); }}
     body[data-status="down"] #spotlight {{ --spot-color: rgba(156, 163, 175, 0.05); }}
     .card {{ transform-style: preserve-3d; }}
-    /* 歷史條 hover 放大需溢出容器才看得到（僅桌面）；行/尾 span 補圓角，外觀與原裁切版一致 */
-    .history-bar {{ overflow: visible; }}
-    .history-bar span:first-child {{ border-radius: 999px 0 0 999px; }}
-    .history-bar span:last-child {{ border-radius: 0 999px 999px 0; }}
+    /* 歷史條 hover 只提亮不變形：位移式 hover 在 288 格上連續觸發會像頻閃 */
     .history-bar span {{
-      transform-origin: center bottom;
-      transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1), filter 150ms cubic-bezier(0.23, 1, 0.32, 1);
+      transition: filter 150ms cubic-bezier(0.23, 1, 0.32, 1);
     }}
     .history-bar span:hover {{
-      transform: scaleY(1.6);
-      filter: brightness(1.35);
+      filter: brightness(1.5);
     }}
     .info-row .info-label,
     .info-row .info-value.muted,
@@ -581,7 +576,6 @@ PAGE_TMPL = """<!DOCTYPE html>
   @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: reduce) {{
     #spotlight {{ display: none; }}
     .card {{ transform: none !important; }}
-    .history-bar span:hover {{ transform: none; }}
   }}
 </style>
 </head>
@@ -742,7 +736,7 @@ PAGE_TMPL = """<!DOCTYPE html>
       }}
     }}
     historyEl.innerHTML = head +
-      '<span class="history-range">最舊 ' + fmtHms(points[0][0] * 1000).slice(0, 5) +
+      '<span class="history-range">' + fmtHms(nowMs - 24 * 3600 * 1000).slice(0, 5) +
       " – 現在</span></div>" +
       '<div class="history-bar">' + spans + "</div>";
   }}
