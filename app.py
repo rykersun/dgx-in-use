@@ -299,27 +299,53 @@ def history_payload():
     return {"bucket_seconds": HISTORY_BUCKET_SECONDS, "points": points}
 
 
-HISTORY_SLOTS = 24 * 3600 // HISTORY_BUCKET_SECONDS  # 24h 橫條的格數（288）
+# v1.7.0 顯示層：把 5 分鐘桶聚合成 30 分鐘槽（每槽 6 桶）畫成 48 格粗條
+HISTORY_SLOT_SECONDS = 30 * 60
+HISTORY_SLOTS_30 = 24 * 3600 // HISTORY_SLOT_SECONDS  # 24h 橫條的格數（48）
+
+
+def _fmt_usage_minutes(minutes):
+    """統計文案：≥60 分鐘顯示「使用 X.X 小時」（一位小數），否則「使用 X 分鐘」。"""
+    if minutes >= 60:
+        return f"使用 {minutes / 60:.1f} 小時"
+    return f"使用 {minutes} 分鐘"
 
 
 def _history_spans_html(points, now):
-    """產生 24h × 5min 的 span 列；缺資料的桶用透明 span 佔位。"""
+    """產生 24h × 30min 的 48 格 span 列；缺資料的槽用透明 span 佔位。
+
+    每槽聚合 6 個 5 分鐘桶，槽內多狀態沿用 HISTORY_STATUS_PRIORITY 優先序；
+    title 取槽起始時間＋優先序最高的狀態。
+    """
     by_ts = dict(points)
-    now_bucket = int(now) // HISTORY_BUCKET_SECONDS * HISTORY_BUCKET_SECONDS
+    now_slot = int(now) // HISTORY_SLOT_SECONDS * HISTORY_SLOT_SECONDS
     parts = []
-    for i in range(HISTORY_SLOTS - 1, -1, -1):
-        ts = now_bucket - i * HISTORY_BUCKET_SECONDS
-        st = by_ts.get(ts)
+    for i in range(HISTORY_SLOTS_30 - 1, -1, -1):
+        slot_ts = now_slot - i * HISTORY_SLOT_SECONDS
+        st = None
+        for bts in range(
+            slot_ts, slot_ts + HISTORY_SLOT_SECONDS, HISTORY_BUCKET_SECONDS
+        ):
+            s = by_ts.get(bts)
+            if s is not None and (
+                st is None
+                or HISTORY_STATUS_PRIORITY.index(s) < HISTORY_STATUS_PRIORITY.index(st)
+            ):
+                st = s
         if st is None:
             parts.append("<span></span>")
         else:
-            title = f"{_fmt_hm(ts)} {HISTORY_STATUS_TEXT[st]}"
+            title = f"{_fmt_hm(slot_ts)} {HISTORY_STATUS_TEXT[st]}"
             parts.append(f'<span class="hb-{st}" title="{html.escape(title)}"></span>')
     return "".join(parts)
 
 
 def _history_block_html(now):
-    """產生整個 24 小時歷史區塊；尚無資料時顯示「資料收集中…」小字。"""
+    """產生整個 24 小時歷史區塊（48 格粗條＋使用時數統計＋底部時間軸）。
+
+    尚無資料時顯示「資料收集中…」小字。統計：24h 內 in-use／in-use-warn
+    桶數 ×5 分鐘（與前端 updateHistory 同規則）。
+    """
     points = history_payload()["points"]
     head = '<div class="history-head"><span class="history-label">24 小時紀錄</span>'
     if not points:
@@ -327,10 +353,20 @@ def _history_block_html(now):
             '<div class="history" id="history">' + head + "</div>"
             '<div class="history-empty">資料收集中…</div></div>'
         )
-    head += f'<span class="history-range">{_fmt_hm(now - 24 * 3600)} – 現在</span></div>'
+    minutes = (
+        sum(1 for _, s in points if s in ("in-use", "in-use-warn"))
+        * HISTORY_BUCKET_SECONDS
+        // 60
+    )
+    head += f'<span class="history-stat">{_fmt_usage_minutes(minutes)}</span></div>'
+    axis = (
+        f'<div class="history-axis"><span>{_fmt_hm(now - 24 * 3600)}</span>'
+        "<span>現在</span></div>"
+    )
     return (
         '<div class="history" id="history">' + head
-        + f'<div class="history-bar">{_history_spans_html(points, now)}</div></div>'
+        + f'<div class="history-bar">{_history_spans_html(points, now)}</div>'
+        + axis + "</div>"
     )
 
 
@@ -479,7 +515,7 @@ PAGE_TMPL = """<!DOCTYPE html>
   }}
   /* 整區重建時新 fill 先免動畫設初始寬度，下一個 frame 由 JS 移除此 class */
   .gpu-fill.no-anim {{ transition: none; }}
-  /* 24 小時使用紀錄（v1.5.0）：每 5 分鐘一桶的狀態橫條 */
+  /* 24 小時使用紀錄（v1.7.0）：5 分鐘桶聚合成 48 格 ×30 分鐘粗條＋使用時數統計 */
   .history {{ margin-top: 1.75rem; }}
   .history-head {{
     display: flex;
@@ -488,7 +524,7 @@ PAGE_TMPL = """<!DOCTYPE html>
     margin-bottom: 0.55rem;
   }}
   .history-label {{ font-size: 0.85rem; color: #9aa3b2; }}
-  .history-range {{
+  .history-stat {{
     margin-left: auto;
     font-family: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
     font-size: 0.75rem;
@@ -496,13 +532,21 @@ PAGE_TMPL = """<!DOCTYPE html>
   }}
   .history-bar {{
     display: flex;
-    gap: 1px;
-    height: 8px;
+    gap: 2px;
+    height: 12px;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.06);
     overflow: hidden;
   }}
-  .history-bar span {{ flex: 1 1 0; min-width: 0; }}
+  .history-bar span {{ flex: 1 1 0; min-width: 0; border-radius: 2px; }}
+  .history-axis {{
+    display: flex;
+    justify-content: space-between;
+    margin-top: 0.4rem;
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
+    font-size: 0.7rem;
+    color: #9aa3b2;
+  }}
   .hb-in-use {{ background: rgba(248, 113, 113, 0.85); }}
   .hb-in-use-warn {{ background: rgba(251, 191, 36, 0.85); }}
   .hb-idle {{ background: rgba(74, 222, 128, 0.85); }}
@@ -580,7 +624,9 @@ PAGE_TMPL = """<!DOCTYPE html>
   var clockOffset = null;    // server-client 時鐘偏移（毫秒）
   var lastGpuShape = null;   // 上次 GPU 區塊形狀（列數／名稱／是否 N/A）
   var lastHistorySig = null; // 上次歷史資料簽章（變了才重建 DOM）
-  var HISTORY_SLOTS = 288;   // 24h ÷ 5min 的格數
+  var HISTORY_SLOTS = 48;        // 24h ÷ 30min 的格數（v1.7.0 粗條）
+  var HISTORY_SLOT_SECONDS = 1800;  // 每格 30 分鐘（聚合 6 個 5 分鐘桶）
+  var HISTORY_BUCKET_SECONDS = 300;  // 後端資料桶寬（秒）
   var HISTORY_CLASSES = {{
     "in-use": "hb-in-use",
     "in-use-warn": "hb-in-use-warn",
@@ -682,7 +728,7 @@ PAGE_TMPL = """<!DOCTYPE html>
   }}
 
   function updateHistory(points) {{
-    // 只在資料簽章（桶數或任一狀態）改變時重建 innerHTML，避免每 5 秒重繪 288 個 span
+    // 只在資料簽章（桶數或任一狀態）改變時重建 innerHTML，避免每 5 秒重繪 48 個 span
     var sig = points.map(function (p) {{ return p.join(":"); }}).join("|");
     if (sig === lastHistorySig) return;
     lastHistorySig = sig;
@@ -691,26 +737,42 @@ PAGE_TMPL = """<!DOCTYPE html>
       historyEl.innerHTML = head + '</div><div class="history-empty">資料收集中…</div>';
       return;
     }}
+    // 槽內多狀態聚合優先序：與後端 HISTORY_STATUS_PRIORITY 一致
+    var PRIORITY = ["in-use-warn", "in-use", "idle", "down"];
     var byTs = {{}};
     for (var i = 0; i < points.length; i++) byTs[points[i][0]] = points[i][1];
-    // 以 server 時鐘（clockOffset）對齊目前的 5 分鐘桶
+    // 以 server 時鐘（clockOffset）對齊目前的 30 分鐘槽
     var nowMs = clockOffset == null ? Date.now() : Date.now() + clockOffset;
-    var nowBucket = Math.floor(nowMs / 1000 / 300) * 300;
+    var nowSlot = Math.floor(nowMs / 1000 / HISTORY_SLOT_SECONDS) * HISTORY_SLOT_SECONDS;
     var spans = "";
     for (var i = HISTORY_SLOTS - 1; i >= 0; i--) {{
-      var ts = nowBucket - i * 300;
-      var st = byTs[ts];
+      var slotTs = nowSlot - i * HISTORY_SLOT_SECONDS;
+      var st = null;
+      for (var bts = slotTs; bts < slotTs + HISTORY_SLOT_SECONDS; bts += HISTORY_BUCKET_SECONDS) {{
+        var s = byTs[bts];
+        if (s && (st === null || PRIORITY.indexOf(s) < PRIORITY.indexOf(st))) st = s;
+      }}
       if (st) {{
         spans += '<span class="' + HISTORY_CLASSES[st] + '" title="' +
-          fmtHms(ts * 1000).slice(0, 5) + " " + HISTORY_TEXT[st] + '"></span>';
+          fmtHms(slotTs * 1000).slice(0, 5) + " " + HISTORY_TEXT[st] + '"></span>';
       }} else {{
         spans += "<span></span>";
       }}
     }}
+    // 統計：24h 內 in-use／in-use-warn 桶數 ×5 分鐘（與後端 _history_block_html 同規則）
+    var minutes = 0;
+    for (var i = 0; i < points.length; i++) {{
+      var s2 = points[i][1];
+      if (s2 === "in-use" || s2 === "in-use-warn") minutes += HISTORY_BUCKET_SECONDS / 60;
+    }}
+    var stat = minutes >= 60
+      ? "使用 " + (minutes / 60).toFixed(1) + " 小時"
+      : "使用 " + minutes + " 分鐘";
     historyEl.innerHTML = head +
-      '<span class="history-range">' + fmtHms(nowMs - 24 * 3600 * 1000).slice(0, 5) +
-      " – 現在</span></div>" +
-      '<div class="history-bar">' + spans + "</div>";
+      '<span class="history-stat">' + stat + "</span></div>" +
+      '<div class="history-bar">' + spans + "</div>" +
+      '<div class="history-axis"><span>' + fmtHms(nowMs - 24 * 3600 * 1000).slice(0, 5) +
+      "</span><span>現在</span></div>";
   }}
 
   function applyData(d) {{
