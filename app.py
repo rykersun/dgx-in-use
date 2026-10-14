@@ -464,32 +464,17 @@ PAGE_TMPL = """<!DOCTYPE html>
   }}
   body[data-status="in-use"]::before {{
     background: radial-gradient(120% 90% at 50% 45%, rgba(248, 113, 113, 1), rgba(248, 113, 113, 0) 85%);
-    opacity: 0.2;
-    animation: glow-in-use 1.8s ease-in-out infinite;  /* 使用中：急促呼吸 */
+    opacity: 0.2;  /* 靜態色調，無動畫（v1.7.1 移除呼吸波紋） */
   }}
   body[data-status="in-use-warn"]::before {{
     background: radial-gradient(120% 90% at 50% 45%, rgba(251, 191, 36, 1), rgba(251, 191, 36, 0) 85%);
-    opacity: 0.2;
-    animation: glow-warn 1.4s ease-in-out infinite;  /* 排隊中：更急促 */
+    opacity: 0.2;  /* 靜態色調，無動畫 */
   }}
   body[data-status="idle"]::before {{
     background: radial-gradient(120% 90% at 50% 45%, rgba(74, 222, 128, 1), rgba(74, 222, 128, 0) 85%);
-    opacity: 0.12;
-    animation: glow-idle 9s ease-in-out infinite;  /* 閒置中：非常緩慢 */
+    opacity: 0.12;  /* 靜態色調，無動畫 */
   }}
   /* 無回應（down）：無光暈，維持靜態灰 */
-  @keyframes glow-in-use {{
-    0%, 100% {{ opacity: 0.12; }}
-    50% {{ opacity: 0.30; }}
-  }}
-  @keyframes glow-warn {{
-    0%, 100% {{ opacity: 0.12; }}
-    50% {{ opacity: 0.30; }}
-  }}
-  @keyframes glow-idle {{
-    0%, 100% {{ opacity: 0.08; }}
-    50% {{ opacity: 0.20; }}
-  }}
   .gpu {{ margin-top: 1.75rem; }}
   .gpu-row + .gpu-row {{ margin-top: 1.1rem; }}
   .gpu-head {{ display: flex; align-items: baseline; gap: 1rem; }}
