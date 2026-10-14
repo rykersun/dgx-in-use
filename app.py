@@ -412,11 +412,11 @@ PAGE_TMPL = """<!DOCTYPE html>
     .in-use .dot, .in-use-warn .dot {{ animation: none; }}
     body[data-status]::before {{ animation: none; }}  /* 停光暈脈動，保留靜態色調 */
   }}
-  /* 狀態驅動光暈：::before 為脈動光暈層（覆蓋視窗上半部），body inset box-shadow 為靜態色調（切換時 0.8s 過渡）；
+  /* 狀態驅動光暈：::before 為脈動光暈層（radial 中心在卡片後方，形成環繞光暈而非僅頂部），body inset box-shadow 為四邊環境光（切換時 0.8s 過渡）；
      有效不透明度上限 0.55（v1.4.1 放寬）。規則內的 opacity 為 reduced-motion 停用動畫時的靜態色調。 */
-  body[data-status="in-use"] {{ box-shadow: inset 0 120px 140px -80px rgba(248, 113, 113, 0.20); }}
-  body[data-status="in-use-warn"] {{ box-shadow: inset 0 120px 140px -80px rgba(251, 191, 36, 0.20); }}
-  body[data-status="idle"] {{ box-shadow: inset 0 120px 140px -80px rgba(74, 222, 128, 0.14); }}
+  body[data-status="in-use"] {{ box-shadow: inset 0 0 180px -60px rgba(248, 113, 113, 0.20); }}
+  body[data-status="in-use-warn"] {{ box-shadow: inset 0 0 180px -60px rgba(251, 191, 36, 0.20); }}
+  body[data-status="idle"] {{ box-shadow: inset 0 0 180px -60px rgba(74, 222, 128, 0.14); }}
   body::before {{
     content: "";
     position: fixed;
@@ -427,17 +427,17 @@ PAGE_TMPL = """<!DOCTYPE html>
     transition: opacity 0.8s ease;
   }}
   body[data-status="in-use"]::before {{
-    background: radial-gradient(120% 55% at 50% 0%, rgba(248, 113, 113, 1), rgba(248, 113, 113, 0) 70%);
+    background: radial-gradient(85% 65% at 50% 45%, rgba(248, 113, 113, 1), rgba(248, 113, 113, 0) 70%);
     opacity: 0.4;
     animation: glow-in-use 3s ease-in-out infinite;
   }}
   body[data-status="in-use-warn"]::before {{
-    background: radial-gradient(120% 55% at 50% 0%, rgba(251, 191, 36, 1), rgba(251, 191, 36, 0) 70%);
+    background: radial-gradient(85% 65% at 50% 45%, rgba(251, 191, 36, 1), rgba(251, 191, 36, 0) 70%);
     opacity: 0.4;
     animation: glow-warn 2.2s ease-in-out infinite;
   }}
   body[data-status="idle"]::before {{
-    background: radial-gradient(120% 55% at 50% 0%, rgba(74, 222, 128, 1), rgba(74, 222, 128, 0) 70%);
+    background: radial-gradient(85% 65% at 50% 45%, rgba(74, 222, 128, 1), rgba(74, 222, 128, 0) 70%);
     opacity: 0.25;
     animation: glow-idle 7s ease-in-out infinite;
   }}
