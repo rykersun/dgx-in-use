@@ -305,10 +305,8 @@ HISTORY_SLOTS_30 = 24 * 3600 // HISTORY_SLOT_SECONDS  # 24h 橫條的格數（48
 
 
 def _fmt_usage_minutes(minutes):
-    """統計文案：≥60 分鐘顯示「使用 X.X 小時」（一位小數），否則「使用 X 分鐘」。"""
-    if minutes >= 60:
-        return f"使用 {minutes / 60:.1f} 小時"
-    return f"使用 {minutes} 分鐘"
+    """統計文案：一律「總共使用 X 分鐘」（與前端 updateHistory 同規則）。"""
+    return f"總共使用 {minutes} 分鐘"
 
 
 def _history_spans_html(points, now):
@@ -335,19 +333,20 @@ def _history_spans_html(points, now):
         if st is None:
             parts.append("<span></span>")
         else:
-            title = f"{_fmt_hm(slot_ts)} {HISTORY_STATUS_TEXT[st]}"
-            parts.append(f'<span class="hb-{st}" title="{html.escape(title)}"></span>')
+            # 時間放 data-t（hover 提示用），不用 title 以免與自訂提示重複
+            parts.append(f'<span class="hb-{st}" data-t="{_fmt_hm(slot_ts)}"></span>')
     return "".join(parts)
 
 
 def _history_block_html(now):
-    """產生整個 24 小時歷史區塊（48 格粗條＋使用時數統計＋底部時間軸）。
+    """產生整個 24 小時歷史區塊（48 格粗條＋使用時數統計＋hover 提示層）。
 
     尚無資料時顯示「資料收集中…」小字。統計：24h 內 in-use／in-use-warn
     桶數 ×5 分鐘（與前端 updateHistory 同規則）。
     """
     points = history_payload()["points"]
     head = '<div class="history-head"><span class="history-label">24 小時紀錄</span>'
+    tip = '<div class="history-tip" id="history-tip"></div>'
     if not points:
         return (
             '<div class="history" id="history">' + head + "</div>"
@@ -359,14 +358,10 @@ def _history_block_html(now):
         // 60
     )
     head += f'<span class="history-stat">{_fmt_usage_minutes(minutes)}</span></div>'
-    axis = (
-        f'<div class="history-axis"><span>{_fmt_hm(now - 24 * 3600)}（24 小時前）</span>'
-        "<span>現在</span></div>"
-    )
     return (
         '<div class="history" id="history">' + head
         + f'<div class="history-bar">{_history_spans_html(points, now)}</div>'
-        + axis + "</div>"
+        + tip + "</div>"
     )
 
 
@@ -508,7 +503,7 @@ PAGE_TMPL = """<!DOCTYPE html>
   /* 整區重建時新 fill 先免動畫設初始寬度，下一個 frame 由 JS 移除此 class */
   .gpu-fill.no-anim {{ transition: none; }}
   /* 24 小時使用紀錄（v1.7.0）：5 分鐘桶聚合成 48 格 ×30 分鐘粗條＋使用時數統計 */
-  .history {{ margin-top: 1.75rem; }}
+  .history {{ margin-top: 1.75rem; position: relative; }}
   .history-head {{
     display: flex;
     align-items: baseline;
@@ -531,14 +526,24 @@ PAGE_TMPL = """<!DOCTYPE html>
     overflow: hidden;
   }}
   .history-bar span {{ flex: 1 1 0; min-width: 0; border-radius: 2px; }}
-  .history-axis {{
-    display: flex;
-    justify-content: space-between;
-    margin-top: 0.4rem;
+  /* 歷史槽 hover 提示：顯示該槽時間＋狀態（僅桌面精準指標裝置由 JS 綁定） */
+  .history-tip {{
+    position: absolute;
+    transform: translateX(-50%);
+    padding: 3px 9px;
+    border-radius: 6px;
+    background: #232833;
+    border: 1px solid rgba(255, 255, 255, 0.12);
     font-family: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
     font-size: 0.7rem;
-    color: #9aa3b2;
+    color: #e6e9ef;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 120ms ease;
+    z-index: 2;
   }}
+  .history-tip.show {{ opacity: 1; }}
   .hb-in-use {{ background: rgba(248, 113, 113, 0.85); }}
   .hb-in-use-warn {{ background: rgba(251, 191, 36, 0.85); }}
   .hb-idle {{ background: rgba(74, 222, 128, 0.85); }}
@@ -745,8 +750,9 @@ PAGE_TMPL = """<!DOCTYPE html>
         if (s && (st === null || PRIORITY.indexOf(s) < PRIORITY.indexOf(st))) st = s;
       }}
       if (st) {{
-        spans += '<span class="' + HISTORY_CLASSES[st] + '" title="' +
-          fmtHms(slotTs * 1000).slice(0, 5) + " " + HISTORY_TEXT[st] + '"></span>';
+        // 時間放 data-t（hover 提示用），不用 title 以免與自訂提示重複
+        spans += '<span class="' + HISTORY_CLASSES[st] + '" data-t="' +
+          fmtHms(slotTs * 1000).slice(0, 5) + '"></span>';
       }} else {{
         spans += "<span></span>";
       }}
@@ -757,13 +763,36 @@ PAGE_TMPL = """<!DOCTYPE html>
       var s2 = points[i][1];
       if (s2 === "in-use" || s2 === "in-use-warn") minutes += HISTORY_BUCKET_SECONDS / 60;
     }}
-    var stat = minutes >= 60
-      ? "使用 " + (minutes / 60).toFixed(1) + " 小時"
-      : "使用 " + minutes + " 分鐘";
+    var stat = "總共使用 " + minutes + " 分鐘";
     historyEl.innerHTML = head +
       '<span class="history-stat">' + stat + "</span></div>" +
       '<div class="history-bar">' + spans + "</div>" +
-      '<div class="history-axis"><span>' + fmtHms(nowMs - 24 * 3600 * 1000).slice(0, 5) + "（24 小時前）</span><span>現在</span></div>";
+      '<div class="history-tip" id="history-tip"></div>';
+  }}
+
+  // 歷史槽 hover 提示：顯示該槽時間＋狀態（僅桌面精準指標裝置綁定，行動裝置零計算）
+  if (window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {{
+    historyEl.addEventListener("pointerover", function (e) {{
+      var sp = e.target;
+      var cn = (sp && sp.className) || "";
+      if (cn.indexOf("hb-") !== 0) return;
+      var tip = document.getElementById("history-tip");
+      if (!tip) return;
+      tip.textContent = (sp.getAttribute("data-t") || "") + " " + (HISTORY_TEXT[cn.slice(3)] || "");
+      var cr = historyEl.getBoundingClientRect();
+      var sr = sp.getBoundingClientRect();
+      var x = sr.left + sr.width / 2 - cr.left;
+      x = Math.max(60, Math.min(cr.width - 60, x));  // 邊緣槽的提示不超出卡片
+      tip.style.left = x + "px";
+      tip.style.top = (sr.top - cr.top - 30) + "px";
+      tip.classList.add("show");
+    }});
+    historyEl.addEventListener("pointerout", function (e) {{
+      var cn = (e.target && e.target.className) || "";
+      if (cn.indexOf("hb-") !== 0) return;
+      var tip = document.getElementById("history-tip");
+      if (tip) tip.classList.remove("show");
+    }});
   }}
 
   function applyData(d) {{
