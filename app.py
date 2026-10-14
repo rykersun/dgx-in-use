@@ -446,35 +446,44 @@ PAGE_TMPL = """<!DOCTYPE html>
   }}
   @media (prefers-reduced-motion: reduce) {{
     .in-use .dot, .in-use-warn .dot {{ animation: none; }}
-    body[data-status]::before {{ animation: none; }}  /* 停光暈脈動，保留靜態色調 */
+    body[data-status]::before {{ animation: none; }}  /* 停光暈漂移，保留靜態色調 */
   }}
-  /* 狀態驅動光暈：::before 為脈動光暈層（radial 中心在卡片後方，形成環繞光暈而非僅頂部），body inset box-shadow 為四邊環境光（切換時 0.8s 過渡）；
-     有效不透明度上限 0.55（v1.4.1 放寬）。規則內的 opacity 為 reduced-motion 停用動畫時的靜態色調。 */
+  /* 狀態驅動光暈：::before 為漂移光暈層（radial 中心在卡片後方、緩慢游走無脈動），body inset box-shadow 為四邊環境光（切換時 0.8s 過渡）；
+     規則內的 opacity 為 reduced-motion 停用動畫時的靜態色調。 */
   body[data-status="in-use"] {{ box-shadow: inset 0 0 220px -90px rgba(248, 113, 113, 0.14); }}
   body[data-status="in-use-warn"] {{ box-shadow: inset 0 0 220px -90px rgba(251, 191, 36, 0.14); }}
   body[data-status="idle"] {{ box-shadow: inset 0 0 220px -90px rgba(74, 222, 128, 0.10); }}
   body::before {{
     content: "";
     position: fixed;
-    inset: 0;
+    inset: -12%;  /* 比視窗大，漂移時不露邊 */
     z-index: -1;
     pointer-events: none;
     opacity: 0;
     transition: opacity 0.8s ease;
   }}
+  /* 動態為「緩慢漂移」：光暈雲緩慢游走，無不透明度脈動（v1.7.2）；速度分級＝活動越頻繁越快 */
   body[data-status="in-use"]::before {{
-    background: radial-gradient(120% 90% at 50% 45%, rgba(248, 113, 113, 1), rgba(248, 113, 113, 0) 85%);
-    opacity: 0.2;  /* 靜態色調，無動畫（v1.7.1 移除呼吸波紋） */
+    background: radial-gradient(70% 55% at 50% 45%, rgba(248, 113, 113, 1), rgba(248, 113, 113, 0) 85%);
+    opacity: 0.2;
+    animation: drift 16s ease-in-out infinite;
   }}
   body[data-status="in-use-warn"]::before {{
-    background: radial-gradient(120% 90% at 50% 45%, rgba(251, 191, 36, 1), rgba(251, 191, 36, 0) 85%);
-    opacity: 0.2;  /* 靜態色調，無動畫 */
+    background: radial-gradient(70% 55% at 50% 45%, rgba(251, 191, 36, 1), rgba(251, 191, 36, 0) 85%);
+    opacity: 0.2;
+    animation: drift 10s ease-in-out infinite;
   }}
   body[data-status="idle"]::before {{
-    background: radial-gradient(120% 90% at 50% 45%, rgba(74, 222, 128, 1), rgba(74, 222, 128, 0) 85%);
-    opacity: 0.12;  /* 靜態色調，無動畫 */
+    background: radial-gradient(70% 55% at 50% 45%, rgba(74, 222, 128, 1), rgba(74, 222, 128, 0) 85%);
+    opacity: 0.12;
+    animation: drift 32s ease-in-out infinite;
   }}
   /* 無回應（down）：無光暈，維持靜態灰 */
+  @keyframes drift {{
+    0%, 100% {{ transform: translate3d(-2.5%, 1.5%, 0); }}
+    30% {{ transform: translate3d(2%, -2%, 0); }}
+    65% {{ transform: translate3d(1.5%, 2.5%, 0); }}
+  }}
   .gpu {{ margin-top: 1.75rem; }}
   .gpu-row + .gpu-row {{ margin-top: 1.1rem; }}
   .gpu-head {{ display: flex; align-items: baseline; gap: 1rem; }}
