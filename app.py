@@ -557,7 +557,6 @@ PAGE_TMPL = """<!DOCTYPE html>
     body[data-status="in-use-warn"] #spotlight {{ --spot-color: rgba(251, 191, 36, 0.10); }}
     body[data-status="idle"] #spotlight {{ --spot-color: rgba(74, 222, 128, 0.08); }}
     body[data-status="down"] #spotlight {{ --spot-color: rgba(156, 163, 175, 0.05); }}
-    .card {{ transform-style: preserve-3d; }}
     /* 歷史條 hover 只提亮不變形：位移式 hover 在 288 格上連續觸發會像頻閃 */
     .history-bar span {{
       transition: filter 150ms cubic-bezier(0.23, 1, 0.32, 1);
@@ -572,10 +571,9 @@ PAGE_TMPL = """<!DOCTYPE html>
     .info-row:hover .info-value.muted,
     .gpu-row:hover .gpu-name {{ color: #c9d1de; }}
   }}
-  /* reduced-motion：光暈不顯示、傾斜與歷史條放大停用（顏色過渡保留） */
+  /* reduced-motion：光暈不顯示（顏色過渡保留） */
   @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: reduce) {{
     #spotlight {{ display: none; }}
-    .card {{ transform: none !important; }}
   }}
 </style>
 </head>
@@ -849,27 +847,22 @@ PAGE_TMPL = """<!DOCTYPE html>
 
   loop();  // 載入立即抓一次，同步時鐘
 
-  // ── v1.6.0 滑鼠互動特效：卡片微傾斜＋游標追隨光暈 ──
-  // 僅桌面精準指標裝置綁事件（觸控／窄螢幕完全不綁、零計算）；
-  // reduced-motion 時整段停用（CSS 端也同步隱藏光暈）。
-  // 兩特效共用一個 rAF 迴圈，只在未到位時跑，靜止不空轉。
+  // ── v1.6.2 滑鼠互動：游標追隨光暈（v1.6.0 的卡片 3D 傾斜已移除——
+  //    每幀 rotate 會讓 288 格細條亞像素位移，看起來像頻閃）──
+  //  僅桌面精準指標裝置綁事件（觸控／窄螢幕完全不綁、零計算）；
+  //  reduced-motion 時整段停用（CSS 端也同步隱藏光暈）。
+  //  rAF 迴圈只在未到位時跑，靜止不空轉。
   (function () {{
     var mq = window.matchMedia;
     if (!mq) return;  // 無 matchMedia 的環境整段跳過，不 throw
     if (!mq("(hover: hover) and (pointer: fine)").matches) return;
-    var reduceMotion = mq("(prefers-reduced-motion: reduce)").matches;
+    if (mq("(prefers-reduced-motion: reduce)").matches) return;  // 減少動態：光暈不顯示也不跟隨
 
-    var card = document.querySelector(".card");
     var spot = document.getElementById("spotlight");
-    if (reduceMotion) spot = null;  // 減少動態：光暈不顯示也不跟隨
-    if (!card && !spot) return;
+    if (!spot) return;
 
-    var TILT_MAX = 2;      // 最大傾角（度），極微妙
-    var TILT_LERP = 0.10;  // 傾斜追值係數（慣性感）
     var SPOT_LERP = 0.14;  // 光暈追值係數
     var SPOT_HALF = 320;   // 光暈層半寬（640px 層的中心偏移）
-    var targetX = 0, targetY = 0;  // 傾斜目標值（rotateX/rotateY，度）
-    var curX = 0, curY = 0;
     var spotX = 0, spotY = 0, spotTX = 0, spotTY = 0;  // 光暈目前／目標位置
     var spotActive = false;  // 滑鼠是否在頁面上
     var pending = false;     // rAF 已排程旗標（避免重複排程）
@@ -884,75 +877,32 @@ PAGE_TMPL = """<!DOCTYPE html>
     function frame() {{
       pending = false;
       var busy = false;
-      if (card) {{
-        curX += (targetX - curX) * TILT_LERP;
-        curY += (targetY - curY) * TILT_LERP;
-        if (Math.abs(targetX - curX) < 0.01 && Math.abs(targetY - curY) < 0.01) {{
-          curX = targetX;
-          curY = targetY;
-        }} else {{
-          busy = true;
-        }}
-        // 只寫 transform（GPU 加速）；歸零時清掉 inline transform
-        card.style.transform = (curX === 0 && curY === 0)
-          ? ""
-          : "perspective(900px) rotateX(" + curX.toFixed(3) + "deg) rotateY(" + curY.toFixed(3) + "deg)";
+      if (spotActive) {{
+        spotX += (spotTX - spotX) * SPOT_LERP;
+        spotY += (spotTY - spotY) * SPOT_LERP;
+        if (Math.abs(spotTX - spotX) > 0.5 || Math.abs(spotTY - spotY) > 0.5) busy = true;
       }}
-      if (spot) {{
-        if (spotActive) {{
-          spotX += (spotTX - spotX) * SPOT_LERP;
-          spotY += (spotTY - spotY) * SPOT_LERP;
-          if (Math.abs(spotTX - spotX) > 0.5 || Math.abs(spotTY - spotY) > 0.5) busy = true;
-        }}
-        spot.style.transform = "translate3d(" + (spotX - SPOT_HALF) + "px, " + (spotY - SPOT_HALF) + "px, 0)";
-      }}
+      spot.style.transform = "translate3d(" + (spotX - SPOT_HALF) + "px, " + (spotY - SPOT_HALF) + "px, 0)";
       if (busy) kick();  // 未到位才續跑，到位即停
     }}
 
-    if (card) {{
-      var rect = null;  // 卡片矩形（進入時算一次，迴圈內不讀 layout）
-      function onCardMove(e) {{
-        if (!rect) rect = card.getBoundingClientRect();
-        var nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-        var ny = ((e.clientY - rect.top) / rect.height) * 2 - 1;
-        nx = Math.max(-1, Math.min(1, nx));
-        ny = Math.max(-1, Math.min(1, ny));
-        targetY = nx * TILT_MAX;   // 滑鼠在右 → 右傾
-        targetX = -ny * TILT_MAX;  // 滑鼠在上 → 上緣後傾
-        kick();
+    var hideSpot = function () {{
+      spotActive = false;
+      spot.style.opacity = "0";  // 淡出（CSS transition 0.5s）
+    }};
+    document.addEventListener("pointermove", function (e) {{
+      spotTX = e.clientX;
+      spotTY = e.clientY;
+      if (!spotActive) {{
+        spotActive = true;
+        spotX = spotTX;  // 首次出現直接就位，不從 (0,0) 飛過來
+        spotY = spotTY;
+        spot.style.opacity = "1";
       }}
-      card.addEventListener("pointerenter", function (e) {{
-        rect = card.getBoundingClientRect();
-        onCardMove(e);
-      }});
-      card.addEventListener("pointermove", onCardMove);
-      card.addEventListener("pointerleave", function () {{
-        rect = null;
-        targetX = 0;
-        targetY = 0;  // 平滑歸零，不瞬跳
-        kick();
-      }});
-    }}
-
-    if (spot) {{
-      var hideSpot = function () {{
-        spotActive = false;
-        spot.style.opacity = "0";  // 淡出（CSS transition 0.5s）
-      }};
-      document.addEventListener("pointermove", function (e) {{
-        spotTX = e.clientX;
-        spotTY = e.clientY;
-        if (!spotActive) {{
-          spotActive = true;
-          spotX = spotTX;  // 首次出現直接就位，不從 (0,0) 飛過來
-          spotY = spotTY;
-          spot.style.opacity = "1";
-        }}
-        kick();
-      }});
-      document.documentElement.addEventListener("mouseleave", hideSpot);
-      window.addEventListener("blur", hideSpot);
-    }}
+      kick();
+    }});
+    document.documentElement.addEventListener("mouseleave", hideSpot);
+    window.addEventListener("blur", hideSpot);
   }})();
 }})();
 </script>
