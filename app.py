@@ -429,17 +429,17 @@ PAGE_TMPL = """<!DOCTYPE html>
   body[data-status="in-use"]::before {{
     background: radial-gradient(120% 90% at 50% 45%, rgba(248, 113, 113, 1), rgba(248, 113, 113, 0) 85%);
     opacity: 0.2;
-    animation: glow-in-use 3s ease-in-out infinite;
+    animation: glow-in-use 1.8s ease-in-out infinite;  /* 使用中：急促呼吸 */
   }}
   body[data-status="in-use-warn"]::before {{
     background: radial-gradient(120% 90% at 50% 45%, rgba(251, 191, 36, 1), rgba(251, 191, 36, 0) 85%);
     opacity: 0.2;
-    animation: glow-warn 2.2s ease-in-out infinite;
+    animation: glow-warn 1.4s ease-in-out infinite;  /* 排隊中：更急促 */
   }}
   body[data-status="idle"]::before {{
     background: radial-gradient(120% 90% at 50% 45%, rgba(74, 222, 128, 1), rgba(74, 222, 128, 0) 85%);
     opacity: 0.12;
-    animation: glow-idle 7s ease-in-out infinite;
+    animation: glow-idle 9s ease-in-out infinite;  /* 閒置中：非常緩慢 */
   }}
   /* 無回應（down）：無光暈，維持靜態灰 */
   @keyframes glow-in-use {{
@@ -532,32 +532,11 @@ PAGE_TMPL = """<!DOCTYPE html>
     font-size: 0.75rem;
     color: #9ca3af;
   }}
-  /* ── v1.6.0 滑鼠互動特效：游標追隨光暈＋hover 回饋 ──
+  /* ── v1.7.0 起移除游標追隨光暈；保留桌面 hover 回饋 ──
      全部 gate 在桌面精準指標裝置（hover: hover + pointer: fine），
-     觸控裝置與窄螢幕零影響、零額外計算；reduced-motion 另於下方關閉位移類特效。 */
-  #spotlight {{
-    display: none;
-    position: fixed;
-    left: 0;
-    top: 0;
-    width: 640px;
-    height: 640px;
-    border-radius: 50%;
-    pointer-events: none;
-    z-index: -1;  /* body::before（狀態光暈）之上、卡片之下 */
-    opacity: 0;
-    transition: opacity 0.5s ease;
-    background: radial-gradient(closest-side, var(--spot-color, rgba(0, 0, 0, 0)), rgba(0, 0, 0, 0));
-    will-change: transform;
-  }}
+     觸控裝置與窄螢幕零影響、零額外計算。 */
   @media (hover: hover) and (pointer: fine) {{
-    #spotlight {{ display: block; }}
-    /* 光暈顏色跟隨 data-status（語意色同現有四色），中心有效不透明度 ≤0.10：環境感非手電筒 */
-    body[data-status="in-use"] #spotlight {{ --spot-color: rgba(248, 113, 113, 0.10); }}
-    body[data-status="in-use-warn"] #spotlight {{ --spot-color: rgba(251, 191, 36, 0.10); }}
-    body[data-status="idle"] #spotlight {{ --spot-color: rgba(74, 222, 128, 0.08); }}
-    body[data-status="down"] #spotlight {{ --spot-color: rgba(156, 163, 175, 0.05); }}
-    /* 歷史條 hover 只提亮不變形：位移式 hover 在 288 格上連續觸發會像頻閃 */
+    /* 歷史條 hover 只提亮不變形：位移式 hover 在多格上連續觸發會像頻閃 */
     .history-bar span {{
       transition: filter 150ms cubic-bezier(0.23, 1, 0.32, 1);
     }}
@@ -571,14 +550,9 @@ PAGE_TMPL = """<!DOCTYPE html>
     .info-row:hover .info-value.muted,
     .gpu-row:hover .gpu-name {{ color: #c9d1de; }}
   }}
-  /* reduced-motion：光暈不顯示（顏色過渡保留） */
-  @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: reduce) {{
-    #spotlight {{ display: none; }}
-  }}
 </style>
 </head>
 <body data-status="{status}">
-<div id="spotlight"></div>
 <div class="card">
 {body}
 </div>
@@ -846,64 +820,6 @@ PAGE_TMPL = """<!DOCTYPE html>
   }});
 
   loop();  // 載入立即抓一次，同步時鐘
-
-  // ── v1.6.2 滑鼠互動：游標追隨光暈（v1.6.0 的卡片 3D 傾斜已移除——
-  //    每幀 rotate 會讓 288 格細條亞像素位移，看起來像頻閃）──
-  //  僅桌面精準指標裝置綁事件（觸控／窄螢幕完全不綁、零計算）；
-  //  reduced-motion 時整段停用（CSS 端也同步隱藏光暈）。
-  //  rAF 迴圈只在未到位時跑，靜止不空轉。
-  (function () {{
-    var mq = window.matchMedia;
-    if (!mq) return;  // 無 matchMedia 的環境整段跳過，不 throw
-    if (!mq("(hover: hover) and (pointer: fine)").matches) return;
-    if (mq("(prefers-reduced-motion: reduce)").matches) return;  // 減少動態：光暈不顯示也不跟隨
-
-    var spot = document.getElementById("spotlight");
-    if (!spot) return;
-
-    var SPOT_LERP = 0.14;  // 光暈追值係數
-    var SPOT_HALF = 320;   // 光暈層半寬（640px 層的中心偏移）
-    var spotX = 0, spotY = 0, spotTX = 0, spotTY = 0;  // 光暈目前／目標位置
-    var spotActive = false;  // 滑鼠是否在頁面上
-    var pending = false;     // rAF 已排程旗標（避免重複排程）
-
-    function kick() {{
-      if (!pending) {{
-        pending = true;
-        requestAnimationFrame(frame);
-      }}
-    }}
-
-    function frame() {{
-      pending = false;
-      var busy = false;
-      if (spotActive) {{
-        spotX += (spotTX - spotX) * SPOT_LERP;
-        spotY += (spotTY - spotY) * SPOT_LERP;
-        if (Math.abs(spotTX - spotX) > 0.5 || Math.abs(spotTY - spotY) > 0.5) busy = true;
-      }}
-      spot.style.transform = "translate3d(" + (spotX - SPOT_HALF) + "px, " + (spotY - SPOT_HALF) + "px, 0)";
-      if (busy) kick();  // 未到位才續跑，到位即停
-    }}
-
-    var hideSpot = function () {{
-      spotActive = false;
-      spot.style.opacity = "0";  // 淡出（CSS transition 0.5s）
-    }};
-    document.addEventListener("pointermove", function (e) {{
-      spotTX = e.clientX;
-      spotTY = e.clientY;
-      if (!spotActive) {{
-        spotActive = true;
-        spotX = spotTX;  // 首次出現直接就位，不從 (0,0) 飛過來
-        spotY = spotTY;
-        spot.style.opacity = "1";
-      }}
-      kick();
-    }});
-    document.documentElement.addEventListener("mouseleave", hideSpot);
-    window.addEventListener("blur", hideSpot);
-  }})();
 }})();
 </script>
 </body>
