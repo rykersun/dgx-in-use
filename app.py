@@ -454,28 +454,29 @@ PAGE_TMPL = """<!DOCTYPE html>
     opacity: 0;
     transition: opacity 0.8s ease;
   }}
-  /* 動態為「緩慢漂移」：光暈雲緩慢游走，無不透明度脈動（v1.7.2）；速度分級＝活動越頻繁越快。
+  /* 動態為「緩慢漂移＋呼吸脈動」（v1.7.5 恢復呼吸，幅度溫和）；速度分級＝活動越頻繁越快。
      v1.7.3：光暈限縮在卡片周圍（px 定尺寸、可微溢出），背景本體維持固定暗色。 */
   body[data-status="in-use"]::before {{
     background: radial-gradient(560px 420px at 50% 45%, rgba(248, 113, 113, 1), rgba(248, 113, 113, 0) 85%);
-    opacity: 0.2;
-    animation: drift 16s ease-in-out infinite;
+    animation: drift 16s ease-in-out infinite, glowpulse 1.8s ease-in-out infinite;  /* 使用中：急促 */
   }}
   body[data-status="in-use-warn"]::before {{
     background: radial-gradient(560px 420px at 50% 45%, rgba(251, 191, 36, 1), rgba(251, 191, 36, 0) 85%);
-    opacity: 0.2;
-    animation: drift 10s ease-in-out infinite;
+    animation: drift 10s ease-in-out infinite, glowpulse 1.4s ease-in-out infinite;  /* 排隊中：更急促 */
   }}
   body[data-status="idle"]::before {{
     background: radial-gradient(560px 420px at 50% 45%, rgba(74, 222, 128, 1), rgba(74, 222, 128, 0) 85%);
-    opacity: 0.12;
-    animation: drift 32s ease-in-out infinite;
+    animation: drift 32s ease-in-out infinite, glowpulse 9s ease-in-out infinite;  /* 閒置中：緩慢 */
   }}
   /* 無回應（down）：無光暈，維持靜態灰 */
   @keyframes drift {{
     0%, 100% {{ transform: translate3d(-14px, 8px, 0); }}
     30% {{ transform: translate3d(12px, -10px, 0); }}
     65% {{ transform: translate3d(8px, 14px, 0); }}
+  }}
+  @keyframes glowpulse {{
+    0%, 100% {{ opacity: 0.10; }}
+    50% {{ opacity: 0.26; }}
   }}
   .gpu {{ margin-top: 1.75rem; }}
   .gpu-row + .gpu-row {{ margin-top: 1.1rem; }}
